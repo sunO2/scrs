@@ -1,0 +1,225 @@
+use std::sync::Arc;
+use adb_client::ADBDeviceExt;
+use axum::{
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize, de};
+use tracing::{info, debug, warn};
+use crate::context::context::{IContext};
+
+/// 设备信息结构
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub serial: String,
+    pub status: String,
+}
+
+/// 设备列表响应
+#[derive(Debug, Serialize)]
+pub struct DevicesResponse {
+    pub devices: Vec<DeviceInfo>,
+    pub count: usize,
+}
+
+/// 连接设备请求
+#[derive(Debug, Deserialize)]
+pub struct ConnectDeviceRequest {
+    pub serial: String,
+}
+
+/// API 响应
+#[derive(Debug, Serialize)]
+pub struct ApiResponse<T> {
+    pub success: bool,
+    pub message: String,
+    pub data: Option<T>,
+}
+
+pub struct ApiServer {
+    pub app: Router,
+}
+
+impl ApiServer {
+    pub fn new(ctx: Arc<dyn IContext + Sync + Send>) -> Self {
+        let app = Router::new()
+            .route("/devices", get(Self::get_devices))
+            .route("/connect", post(Self::connect_device))
+            .route("/disconnect", post(Self::disconnect_device))
+            .route("/device/{serial}/status", get(Self::get_device_status))
+            .route("/hello", get(Self::hello))
+            .with_state(ctx);
+        ApiServer { app }
+    }
+
+    /// 启动 API 服务器
+    pub async fn run(self) {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+            .await
+            .expect("Failed to bind to 0.0.0.0:3000");
+        println!("Server running on http://0.0.0.0:3000");
+        
+        if let Err(e) = axum::serve(listener, self.app).await {
+            eprintln!("Server error: {:?}", e);
+        }
+    }
+
+    /// 获取设备列表
+    async fn get_devices(
+        State(ctx): State<Arc<dyn IContext + Sync + Send>>,
+    ) -> Json<DevicesResponse> {
+        debug!("收到获取设备列表请求");
+        
+        // 通过 ADBServer 获取当前连接的设备
+        let mut adb_server = ctx.get_adb_server().write().unwrap();
+        let adb_devices: Result<Vec<adb_client::server::DeviceShort>, adb_client::RustADBError> = adb_server.devices();
+
+        let devices: Vec<DeviceInfo> = match adb_devices {
+            Ok(devs) => devs.iter().map(|device: &adb_client::server::DeviceShort| {
+                info!("ADB 设备: {} - 状态: {}", device.identifier, device.state);
+                DeviceInfo {
+                    serial: device.identifier.clone(),
+                    status: device.state.to_string(),
+                }
+            }).collect(),
+            Err(e) => {
+                warn!("获取设备列表失败: {:?}", e);
+                vec![]
+            }
+        }; 
+
+        let count = devices.len();
+        info!("获取设备列表成功，共 {} 个设备", count);
+        Json(DevicesResponse {
+            devices,
+            count,
+        })
+    }
+
+    /// 连接设备
+    async fn connect_device(
+        State(ctx): State<Arc<dyn IContext + Sync + Send>>,
+        Json(req): Json<ConnectDeviceRequest>,
+    ) -> (StatusCode, Json<ApiResponse<String>>) {
+        debug!("收到连接设备请求: {}", req.serial);
+        let mut scrcpy: std::sync::RwLockWriteGuard<'_, crate::context::context::ScrcpyServer> = ctx.get_scrcpy().write().unwrap();
+        let mut adb = ctx.get_adb_server().write().unwrap();
+
+        let jar_file = scrcpy.get_server_jar();
+        let mut device = adb.get_device_by_name(&req.serial).unwrap();
+        device.reverse( String::from("localabstract:scrcpy"),String::from("tcp:3001")).unwrap();
+
+        let push_status = device.push(jar_file, "/data/local/tmp/scrcpy-server.jar");
+        match push_status {
+            Ok(_) => info!("设备 {} 推送文件成功", req.serial),
+            Err(e) => warn!("设备 {} 推送文件失败: {:?}", req.serial, e),
+        }
+
+        device.shell_command(
+            &"CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 3.3.4 log_level=info audio=false max_size=1920",
+        &mut std::io::stdout()).unwrap();
+
+        // 检查设备是否已连接
+        if scrcpy.is_device_connected(&req.serial) {
+            warn!("设备 {} 已经连接", req.serial);
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("设备 {} 已经连接", req.serial),
+                    data: None,
+                })
+            );
+        }
+
+        // 添加设备到管理列表
+        scrcpy.add_device(req.serial.clone(), "connected".to_string());
+        info!("设备 {} 连接成功", req.serial);
+        
+        (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                message: format!("设备 {} 连接成功", req.serial),
+                data: Some(req.serial),
+            })
+        )
+    }
+
+    /// 断开设备连接
+    async fn disconnect_device(
+        State(ctx): State<Arc<dyn IContext + Sync + Send>>,
+        Json(req): Json<ConnectDeviceRequest>,
+    ) -> (StatusCode, Json<ApiResponse<String>>) {
+        debug!("收到断开设备请求: {}", req.serial);
+        let mut scrcpy = ctx.get_scrcpy().write().unwrap();
+        
+        if !scrcpy.is_device_connected(&req.serial) {
+            warn!("设备 {} 未连接", req.serial);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("设备 {} 未连接", req.serial),
+                    data: None,
+                })
+            );
+        }
+
+        scrcpy.remove_device(&req.serial);
+        info!("设备 {} 断开连接成功", req.serial);
+        
+        (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                message: format!("设备 {} 断开连接成功", req.serial),
+                data: Some(req.serial),
+            })
+        )
+    }
+
+    /// 获取设备状态
+    async fn get_device_status(
+        State(ctx): State<Arc<dyn IContext + Sync + Send>>,
+        axum::extract::Path(serial): axum::extract::Path<String>,
+    ) -> (StatusCode, Json<ApiResponse<DeviceInfo>>) {
+        debug!("收到获取设备状态请求: {}", serial);
+        let scrcpy = ctx.get_scrcpy().read().unwrap();
+        
+        match scrcpy.get_device_status(&serial) {
+            Some(status) => {
+                info!("获取设备 {} 状态成功", serial);
+                (
+                    StatusCode::OK,
+                    Json(ApiResponse {
+                        success: true,
+                        message: "获取设备状态成功".to_string(),
+                        data: Some(DeviceInfo {
+                            serial: serial.clone(),
+                            status: status.clone(),
+                        }),
+                    })
+                )
+            },
+            None => {
+                warn!("设备 {} 未找到", serial);
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ApiResponse {
+                        success: false,
+                        message: format!("设备 {} 未找到", serial),
+                        data: None,
+                    })
+                )
+            }
+        }
+    }
+
+    /// 测试端点
+    async fn hello() -> String {
+        "你好，欢迎使用 Axum Scrcpy API！".to_string()
+    }
+}
