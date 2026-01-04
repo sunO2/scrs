@@ -3,10 +3,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::RwLock;
+use crate::scrcpy::scrcpy::ScrcpyConnect;
 
 /// Scrcpy 服务器，负责管理设备连接和屏幕镜像
 pub struct ScrcpyServer {
-    devices: HashMap<String, String>, // 设备序列号 -> 设备状态
+    devices: HashMap<String, ScrcpyConnect>, // 设备序列号 -> ScrcpyConnect 实例
 }
 
 #[derive(rust_embed::RustEmbed)]
@@ -32,8 +33,8 @@ impl ScrcpyServer {
     }
 
     /// 添加设备到管理列表
-    pub fn add_device(&mut self, serial: String, status: String) {
-        self.devices.insert(serial, status);
+    pub fn add_device(&mut self, serial: String, connect: ScrcpyConnect) {
+        self.devices.insert(serial, connect);
     }
 
     /// 从管理列表中移除设备
@@ -41,8 +42,8 @@ impl ScrcpyServer {
         self.devices.remove(serial);
     }
 
-    /// 获取设备状态
-    pub fn get_device_status(&self, serial: &str) -> Option<&String> {
+    /// 获取设备连接实例
+    pub fn get_device_connect(&self, serial: &str) -> Option<&ScrcpyConnect> {
         self.devices.get(serial)
     }
 

@@ -12,6 +12,10 @@ serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0.7"
+socketioxide = "0.18"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
 
 ### 文件内嵌
 rust-embed = "8"
+base64 = "0.22.1"

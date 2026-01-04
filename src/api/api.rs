@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{net::TcpListener, sync::Arc};
 use adb_client::ADBDeviceExt;
 use axum::{
     extract::State,
@@ -6,9 +6,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize, de};
+use serde::{Deserialize, Serialize};
 use tracing::{info, debug, warn};
 use crate::context::context::{IContext};
+use crate::scrcpy::scrcpy::ScrcpyConnect;
 
 /// 设备信息结构
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +29,13 @@ pub struct DevicesResponse {
 #[derive(Debug, Deserialize)]
 pub struct ConnectDeviceRequest {
     pub serial: String,
+}
+
+/// 连接设备响应
+#[derive(Debug, Serialize)]
+pub struct ConnectResponse {
+    pub serial: String,
+    pub socketio_port: u16,
 }
 
 /// API 响应
@@ -102,14 +110,24 @@ impl ApiServer {
     async fn connect_device(
         State(ctx): State<Arc<dyn IContext + Sync + Send>>,
         Json(req): Json<ConnectDeviceRequest>,
-    ) -> (StatusCode, Json<ApiResponse<String>>) {
+    ) -> (StatusCode, Json<ApiResponse<ConnectResponse>>) {
         debug!("收到连接设备请求: {}", req.serial);
         let mut scrcpy: std::sync::RwLockWriteGuard<'_, crate::context::context::ScrcpyServer> = ctx.get_scrcpy().write().unwrap();
         let mut adb = ctx.get_adb_server().write().unwrap();
 
         let jar_file = scrcpy.get_server_jar();
         let mut device = adb.get_device_by_name(&req.serial).unwrap();
-        device.reverse( String::from("localabstract:scrcpy"),String::from("tcp:3001")).unwrap();
+
+        // 动态分配可用端口
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .expect("Failed to bind to an available port");
+        let port = listener.local_addr()
+            .expect("Failed to get local address")
+            .port();
+        drop(listener);
+
+        info!("revevrse port: {}",port);
+        device.reverse(String::from("localabstract:scrcpy"),format!("tcp:{}",port)).unwrap();
 
         let push_status = device.push(jar_file, "/data/local/tmp/scrcpy-server.jar");
         match push_status {
@@ -117,9 +135,9 @@ impl ApiServer {
             Err(e) => warn!("设备 {} 推送文件失败: {:?}", req.serial, e),
         }
 
-        device.shell_command(
-            &"CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 3.3.4 log_level=info audio=false max_size=1920",
-        &mut std::io::stdout()).unwrap();
+
+        let connect = ScrcpyConnect::new(device,3001);
+        let port = connect.get_port();
 
         // 检查设备是否已连接
         if scrcpy.is_device_connected(&req.serial) {
@@ -135,15 +153,18 @@ impl ApiServer {
         }
 
         // 添加设备到管理列表
-        scrcpy.add_device(req.serial.clone(), "connected".to_string());
-        info!("设备 {} 连接成功", req.serial);
+        scrcpy.add_device(req.serial.clone(), connect);
+        info!("设备 {} 连接成功，Socket.IO 端口: {}", req.serial, port);
         
         (
             StatusCode::OK,
             Json(ApiResponse {
                 success: true,
                 message: format!("设备 {} 连接成功", req.serial),
-                data: Some(req.serial),
+                data: Some(ConnectResponse {
+                    serial: req.serial.clone(),
+                    socketio_port: port,
+                }),
             })
         )
     }
@@ -189,8 +210,8 @@ impl ApiServer {
         debug!("收到获取设备状态请求: {}", serial);
         let scrcpy = ctx.get_scrcpy().read().unwrap();
         
-        match scrcpy.get_device_status(&serial) {
-            Some(status) => {
+        match scrcpy.get_device_connect(&serial) {
+            Some(_connect) => {
                 info!("获取设备 {} 状态成功", serial);
                 (
                     StatusCode::OK,
@@ -199,7 +220,7 @@ impl ApiServer {
                         message: "获取设备状态成功".to_string(),
                         data: Some(DeviceInfo {
                             serial: serial.clone(),
-                            status: status.clone(),
+                            status: "connected".to_string(),
                         }),
                     })
                 )

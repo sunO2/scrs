@@ -1,6 +1,7 @@
 mod api;
 mod context;
 mod error;
+mod scrcpy;
 
 use std::sync::Arc;
 use tracing::{info, error};
