@@ -127,7 +127,8 @@ impl ApiServer {
         drop(listener);
 
         info!("revevrse port: {}",port);
-        device.reverse(String::from("localabstract:scrcpy"),format!("tcp:{}",port)).unwrap();
+        device.forward_remove_all();
+        device.forward(String::from("localabstract:scrcpy"),format!("tcp:{}",port)).unwrap();
 
         let push_status = device.push(jar_file, "/data/local/tmp/scrcpy-server.jar");
         match push_status {
@@ -136,7 +137,7 @@ impl ApiServer {
         }
 
 
-        let connect = ScrcpyConnect::new(device,3001);
+        let connect = ScrcpyConnect::new(device,port);
         let port = connect.get_port();
 
         // 检查设备是否已连接

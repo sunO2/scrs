@@ -9,14 +9,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, split};
 use tokio::net::TcpStream;
 
 pub struct ScrcpyConnect {
-    device: ADBServerDevice,
+    device: Arc<std::sync::Mutex<ADBServerDevice>>,
     port: u16,
     _socket_io: Arc<SocketIo>, // 保存 SocketIo 实例以保持服务器运行
     socket_writer: Arc<tokio::sync::Mutex<Option<tokio::io::WriteHalf<TcpStream>>>>, // Socket 写入端的共享引用
 }
 
 impl ScrcpyConnect {
-    pub fn new(mut device: ADBServerDevice, reverse_port: u16) -> ScrcpyConnect {
+    pub fn new(device: ADBServerDevice, reverse_port: u16) -> ScrcpyConnect {
+        // 将 device 包装在 Arc<Mutex> 中以便共享可变访问
+        let device = Arc::new(std::sync::Mutex::new(device));
+        
         // 动态分配可用端口
         let listener = TcpListener::bind("127.0.0.1:0")
             .expect("Failed to bind to an available port");
@@ -77,12 +80,13 @@ impl ScrcpyConnect {
         tokio::spawn(async move {
             // 等待 scrcpy server 启动
             info!("等待 scrcpy server 启动 (3秒)...");
-            // tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             
             loop {
                 match TcpStream::connect(&socket_addr).await {
                     Ok(stream) => {
                         info!("成功连接到 socket 服务端: {}", socket_addr);
+                        
                         
                         // 拆分 stream 为 reader 和 writer
                         let (mut reader, writer) = split(stream);
@@ -137,13 +141,6 @@ impl ScrcpyConnect {
         
           });
 
-        let mut log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(format!("logs/ws_{}.log", device.identifier.clone().unwrap())).unwrap();
-        device.shell_command(  &"CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 3.3.4 log_level=info audio=false max_size=1920",&mut std::io::stdout()).unwrap();
-       
-
         // 添加 scrcpy_client 事件处理：接收 Socket.IO 客户端数据，透传给 socket 服务端
         io.ns("/", move |s: socketioxide::extract::SocketRef| {
             let writer = Arc::clone(&socket_writer_for_event);
@@ -172,6 +169,21 @@ impl ScrcpyConnect {
             }
         });
 
+        // 启动 scrcpy server
+        let device_identifier = device.lock().unwrap().identifier.clone();
+        let device_for_spawn = Arc::clone(&device);
+        tokio::spawn(async move {
+            let mut log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(format!("logs/ws_{}.log", device_identifier.unwrap())).unwrap();
+            let mut device = device_for_spawn.lock().unwrap();
+            device.shell_command(
+                &"CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 3.3.4 log_level=info audio=false max_size=1920 tunnel_forward=true",
+                &mut log_file
+            ).unwrap();
+        });
+
         ScrcpyConnect {
             device,
             port,
@@ -184,7 +196,7 @@ impl ScrcpyConnect {
         self.port
     }
 
-    pub fn get_device(&self) -> &ADBServerDevice {
-        &self.device
+    pub fn get_device(&self) -> Arc<std::sync::Mutex<ADBServerDevice>> {
+        Arc::clone(&self.device)
     }
 }
