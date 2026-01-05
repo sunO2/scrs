@@ -19,3 +19,4 @@ tower-http = { version = "0.6", features = ["cors"] }
 ### 文件内嵌
 rust-embed = "8"
 base64 = "0.22.1"
+bytes = "1.9"

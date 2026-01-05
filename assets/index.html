@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scrcpy Web Viewer</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        #container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #header {
+            background: #2d2d2d;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #3d3d3d;
+        }
+
+        #header h1 {
+            font-size: 20px;
+            font-weight: 500;
+        }
+
+        #status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #666;
+            transition: all 0.3s;
+        }
+
+        .status-indicator.connected {
+            background: #4caf50;
+            box-shadow: 0 0 10px #4caf50;
+        }
+
+        .status-indicator.disconnected {
+            background: #f44336;
+        }
+
+        #videoContainer {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            background: #0d0d0d;
+            position: relative;
+            overflow: hidden;
+            z-index: 1;
+        }
+
+        #phoneFrame {
+            position: relative;
+            background: #000;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            max-width: 100%;
+            max-height: 100%;
+            z-index: 1;
+        }
+
+        #canvas {
+            display: block;
+            cursor: pointer;
+        }
+
+        #controls {
+            background: #2d2d2d;
+            padding: 15px 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            border-top: 1px solid #3d3d3d;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 10;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .control-group label {
+            font-size: 12px;
+            color: #999;
+            white-space: nowrap;
+        }
+
+        input[type="text"], input[type="number"] {
+            background: #3d3d3d;
+            border: 1px solid #4d4d4d;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        input[type="text"] {
+            width: 200px;
+        }
+
+        input[type="number"] {
+            width: 80px;
+        }
+
+        input[type="text"]:focus, input[type="number"]:focus {
+            outline: none;
+            border-color: #2196f3;
+        }
+
+        button {
+            background: #2196f3;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #1976d2;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        button.disconnect {
+            background: #f44336;
+        }
+
+        button.disconnect:hover {
+            background: #d32f2f;
+        }
+
+        #stats {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: monospace;
+            pointer-events: none;
+        }
+
+        #touchIndicator {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(33, 150, 243, 0.3);
+            border: 2px solid #2196f3;
+            pointer-events: none;
+            display: none;
+            transform: translate(-50%, -50%);
+        }
+
+        .loading {
+            text-align: center;
+            color: #999;
+        }
+
+        .loading:after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        #errorMessage {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #f44336;
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 4px;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        #errorMessage.show {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="header">
+            <h1>📱 Scrcpy Web Viewer</h1>
+            <div id="status">
+                <div class="status-indicator disconnected"></div>
+                <span id="statusText">未连接</span>
+            </div>
+        </div>
+
+        <div id="videoContainer">
+            <div id="phoneFrame">
+                <canvas id="canvas"></canvas>
+                <div id="stats"></div>
+                <div id="touchIndicator"></div>
+            </div>
+            <div id="loadingHint" class="loading">连接中</div>
+        </div>
+
+        <div id="controls">
+            <div class="control-group">
+                <label for="socketUrl">Socket.IO URL:</label>
+                <input type="text" id="socketUrl" value="http://127.0.0.1:60482" placeholder="http://127.0.0.1:60482">
+            </div>
+            <button id="connectBtn">连接</button>
+            <button id="disconnectBtn" class="disconnect" style="display:none;">断开</button>
+            <div class="control-group">
+                <label>测试坐标:</label>
+                <input type="number" id="testX" value="540" style="width: 80px;" placeholder="X">
+                <input type="number" id="testY" value="960" style="width: 80px;" placeholder="Y">
+                <button id="testClickBtn" style="background: #4caf50;">测试点击</button>
+            </div>
+            <div class="control-group" style="margin-left: auto;">
+                <label>屏幕尺寸:</label>
+                <input type="number" id="screenWidth" value="1080" style="width: 80px;">
+                <span style="margin: 0 4px;">×</span>
+                <input type="number" id="screenHeight" value="1920" style="width: 80px;">
+            </div>
+            <button id="resizeBtn">应用尺寸</button>
+        </div>
+    </div>
+
+    <div id="errorMessage"></div>
+
+    <script src="socketio-client.js"></script>
+</body>
+</html>

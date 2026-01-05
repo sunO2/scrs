@@ -1277,6 +1277,7 @@ dependencies = [
  "adb_client",
  "axum",
  "base64",
+ "bytes",
  "rust-embed",
  "serde",
  "serde_json",

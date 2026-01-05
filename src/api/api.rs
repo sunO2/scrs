@@ -1,13 +1,16 @@
-use std::{net::TcpListener, sync::Arc};
+use std::{sync::Arc, net::TcpListener};
 use adb_client::ADBDeviceExt;
 use axum::{
     extract::State,
     http::StatusCode,
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
+    body::Body,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{info, debug, warn};
+use rust_embed::RustEmbed;
 use crate::context::context::{IContext};
 use crate::scrcpy::scrcpy::ScrcpyConnect;
 
@@ -46,6 +49,11 @@ pub struct ApiResponse<T> {
     pub data: Option<T>,
 }
 
+/// 静态文件资源
+#[derive(RustEmbed)]
+#[folder = "assets/"]
+struct Assets;
+
 pub struct ApiServer {
     pub app: Router,
 }
@@ -58,6 +66,8 @@ impl ApiServer {
             .route("/disconnect", post(Self::disconnect_device))
             .route("/device/{serial}/status", get(Self::get_device_status))
             .route("/hello", get(Self::hello))
+            .route("/assets/index.html", get(Self::index_html))
+            .route("/assets/socketio-client.js", get(Self::socketio_client_js))
             .with_state(ctx);
         ApiServer { app }
     }
@@ -112,6 +122,29 @@ impl ApiServer {
         Json(req): Json<ConnectDeviceRequest>,
     ) -> (StatusCode, Json<ApiResponse<ConnectResponse>>) {
         debug!("收到连接设备请求: {}", req.serial);
+
+        // 优先检查设备是否已连接
+        {
+            let scrcpy_read = ctx.get_scrcpy().read().unwrap();
+            if scrcpy_read.is_device_connected(&req.serial) {
+                info!("设备 {} 已经连接，返回现有连接信息", req.serial);
+                if let Some(connect) = scrcpy_read.get_device_connect(&req.serial) {
+                    return (
+                        StatusCode::OK,
+                        Json(ApiResponse {
+                            success: true,
+                            message: format!("设备 {} 已连接", req.serial),
+                            data: Some(ConnectResponse {
+                                serial: req.serial.clone(),
+                                socketio_port: connect.get_port(),
+                            }),
+                        })
+                    );
+                }
+            }
+        }
+        // 释放读锁
+
         let mut scrcpy: std::sync::RwLockWriteGuard<'_, crate::context::context::ScrcpyServer> = ctx.get_scrcpy().write().unwrap();
         let mut adb = ctx.get_adb_server().write().unwrap();
 
@@ -126,9 +159,9 @@ impl ApiServer {
             .port();
         drop(listener);
 
-        info!("revevrse port: {}",port);
-        device.forward_remove_all();
-        device.forward(String::from("localabstract:scrcpy"),format!("tcp:{}",port)).unwrap();
+        info!("reverse port: {}", port);
+        let _ = device.forward_remove_all();
+        device.forward(String::from("localabstract:scrcpy"), format!("tcp:{}", port)).unwrap();
 
         let push_status = device.push(jar_file, "/data/local/tmp/scrcpy-server.jar");
         match push_status {
@@ -136,27 +169,17 @@ impl ApiServer {
             Err(e) => warn!("设备 {} 推送文件失败: {:?}", req.serial, e),
         }
 
-
-        let connect = ScrcpyConnect::new(device,port);
-        let port = connect.get_port();
-
-        // 检查设备是否已连接
-        if scrcpy.is_device_connected(&req.serial) {
-            warn!("设备 {} 已经连接", req.serial);
-            return (
-                StatusCode::CONFLICT,
-                Json(ApiResponse {
-                    success: false,
-                    message: format!("设备 {} 已经连接", req.serial),
-                    data: None,
-                })
-            );
-        }
+        let connect: ScrcpyConnect = ScrcpyConnect::new(port);
+        let socket_io_port = connect.get_port();
+        let socket_io_port_1 = connect.get_port();
+        tokio::spawn(async move {
+            ScrcpyConnect::run(Arc::new(ScrcpyConnect::default(socket_io_port_1, port)), Arc::new(device)).await;
+        });
 
         // 添加设备到管理列表
         scrcpy.add_device(req.serial.clone(), connect);
-        info!("设备 {} 连接成功，Socket.IO 端口: {}", req.serial, port);
-        
+        info!("设备 {} 连接成功，Socket.IO 端口: {}", req.serial, socket_io_port);
+
         (
             StatusCode::OK,
             Json(ApiResponse {
@@ -164,7 +187,7 @@ impl ApiServer {
                 message: format!("设备 {} 连接成功", req.serial),
                 data: Some(ConnectResponse {
                     serial: req.serial.clone(),
-                    socketio_port: port,
+                    socketio_port: socket_io_port,
                 }),
             })
         )
@@ -243,5 +266,20 @@ impl ApiServer {
     /// 测试端点
     async fn hello() -> String {
         "你好，欢迎使用 Axum Scrcpy API！".to_string()
+    }
+
+    /// 主页 HTML
+    async fn index_html() -> impl IntoResponse {
+        let html = Assets::get("index.html").unwrap();
+        Html(html.data.to_vec())
+    }
+
+    /// Socket.IO 客户端 JS
+    async fn socketio_client_js() -> impl IntoResponse {
+        let js = Assets::get("socketio-client.js").unwrap();
+        Response::builder()
+            .header("Content-Type", "application/javascript")
+            .body(Body::from(js.data.to_vec()))
+            .unwrap()
     }
 }
