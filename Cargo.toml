@@ -20,3 +20,11 @@ tower-http = { version = "0.6", features = ["cors"] }
 rust-embed = "8"
 base64 = "0.22.1"
 bytes = "1.9"
+
+
+[profile.release]
+opt-level = "z"        # 优化体积
+lto = true            # 链接时优化
+codegen-units = 1     # 更好的优化
+strip = true          # 去除调试符号
+panic = "abort"       # 减小 panic 处理体积
