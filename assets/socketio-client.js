@@ -1103,6 +1103,20 @@ function connect() {
     // 处理设备元数据
     socket.on('scrcpy_device_meta', (deviceName) => {
         log(`收到设备元数据: ${deviceName}`, 'success');
+
+        // 重置解码器以处理新的解码数据
+        if (decoder) {
+            // 销毁旧解码器
+            decoder.destroy();
+
+            // 创建新解码器
+            decoder = new H264Decoder();
+            decoder.init((frameData) => {
+                drawFrame(frameData);
+            });
+
+            log('解码器已重置，准备接收新的解码数据', 'info');
+        }
     });
 
     socket.on('scrcpy', (base64Data) => {
