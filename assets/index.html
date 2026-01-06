@@ -19,122 +19,95 @@
             overflow: hidden;
         }
 
-        #container {
+        .main-container {
             display: flex;
-            flex-direction: column;
             height: 100vh;
+            width: 100vw;
         }
 
-        #header {
+        /* Left Panel - Device Connection */
+        .panel-left {
+            width: 33.33%;
+            min-width: 300px;
+            padding: 20px;
             background: #2d2d2d;
-            padding: 15px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #3d3d3d;
+            border-right: 1px solid #3d3d3d;
+            overflow-y: auto;
         }
 
-        #header h1 {
+        .panel-left h2 {
             font-size: 20px;
             font-weight: 500;
+            margin-bottom: 20px;
+            color: #2196f3;
         }
 
-        #status {
-            display: flex;
-            align-items: center;
-            gap: 8px;
+        .panel-left h3 {
             font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 10px;
+            color: #999;
         }
 
-        .status-indicator {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #666;
-            transition: all 0.3s;
+        .section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #383838;
+            border-radius: 8px;
         }
 
-        .status-indicator.connected {
-            background: #4caf50;
-            box-shadow: 0 0 10px #4caf50;
-        }
-
-        .status-indicator.disconnected {
-            background: #f44336;
-        }
-
-        #videoContainer {
-            flex: 1;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-            background: #0d0d0d;
-            position: relative;
-            overflow: hidden;
-            z-index: 1;
-        }
-
-        #phoneFrame {
-            position: relative;
-            background: #000;
-            border-radius: 20px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-            overflow: hidden;
-            max-width: 100%;
-            max-height: 100%;
-            z-index: 1;
-        }
-
-        #canvas {
+        .section label {
             display: block;
-            cursor: pointer;
-        }
-
-        #controls {
-            background: #2d2d2d;
-            padding: 15px 20px;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            border-top: 1px solid #3d3d3d;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 10;
-        }
-
-        .control-group {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .control-group label {
             font-size: 12px;
             color: #999;
-            white-space: nowrap;
+            margin-bottom: 5px;
         }
 
-        input[type="text"], input[type="number"] {
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
             background: #3d3d3d;
             border: 1px solid #4d4d4d;
             color: #fff;
             padding: 8px 12px;
             border-radius: 4px;
             font-size: 14px;
+            box-sizing: border-box;
         }
 
-        input[type="text"] {
-            width: 200px;
+        select {
+            width: 100%;
+            margin-bottom: 10px;
         }
 
-        input[type="number"] {
-            width: 80px;
+        .input-group select {
+            margin-bottom: 0;
+            flex: 1;
+            min-width: 0;
         }
 
-        input[type="text"]:focus, input[type="number"]:focus {
+        .input-group input[type="text"],
+        .input-group input[type="number"] {
+            flex: 1;
+            min-width: 0;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
             outline: none;
             border-color: #2196f3;
+        }
+
+        select {
+            width: 100%;
+            margin-bottom: 10px;
         }
 
         button {
@@ -146,6 +119,8 @@
             cursor: pointer;
             font-size: 14px;
             transition: background 0.2s;
+            width: 100%;
+            margin-bottom: 8px;
         }
 
         button:hover {
@@ -163,6 +138,189 @@
 
         button.disconnect:hover {
             background: #d32f2f;
+        }
+
+        button.secondary {
+            background: #555;
+        }
+
+        button.secondary:hover {
+            background: #666;
+        }
+
+        button.icon-button {
+            width: auto;
+            padding: 8px 10px;
+            margin-bottom: 0;
+            font-size: 14px;
+            min-width: 40px;
+        }
+
+        .status-section {
+            margin-top: 20px;
+            padding: 15px;
+            background: #383838;
+            border-radius: 8px;
+        }
+
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .status-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .status-item .label {
+            font-size: 14px;
+            color: #999;
+            margin-bottom: 0;
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            background: #666;
+        }
+
+        .status-badge.connected {
+            background: #4caf50;
+        }
+
+        .status-badge.disconnected {
+            background: #f44336;
+        }
+
+        /* Middle Panel - Log Area */
+        .panel-middle {
+            width: 33.33%;
+            min-width: 300px;
+            padding: 20px;
+            background: #1a1a1a;
+            border-right: 1px solid #3d3d3d;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-middle h2 {
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 15px;
+            color: #2196f3;
+        }
+
+        .log-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        .log-controls button {
+            width: auto;
+            margin-bottom: 0;
+        }
+
+        .log-controls label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            color: #999;
+            cursor: pointer;
+            margin-bottom: 0;
+        }
+
+        .log-controls input[type="checkbox"] {
+            cursor: pointer;
+        }
+
+        .log-container {
+            flex: 1;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+            background: #000;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .log-entry {
+            padding: 4px 8px;
+            margin: 2px 0;
+            border-left: 3px solid #666;
+            word-wrap: break-word;
+        }
+
+        .log-entry.info {
+            border-left-color: #2196f3;
+        }
+
+        .log-entry.warn {
+            border-left-color: #ff9800;
+        }
+
+        .log-entry.error {
+            border-left-color: #f44336;
+        }
+
+        .log-entry.success {
+            border-left-color: #4caf50;
+        }
+
+        .log-timestamp {
+            color: #666;
+            margin-right: 8px;
+        }
+
+        /* Right Panel - Video Display */
+        .panel-right {
+            width: 33.33%;
+            min-width: 300px;
+            padding: 20px;
+            background: #0d0d0d;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .panel-right h2 {
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 15px;
+            color: #2196f3;
+        }
+
+        .video-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+        }
+
+        #phoneFrame {
+            position: relative;
+            background: #000;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            width: 100%;
+            aspect-ratio: 1080 / 1920;
+            max-width: 100%;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            cursor: pointer;
         }
 
         #stats {
@@ -205,6 +363,10 @@
             60%, 100% { content: '...'; }
         }
 
+        .hidden {
+            display: none !important;
+        }
+
         #errorMessage {
             position: fixed;
             top: 20px;
@@ -216,6 +378,7 @@
             display: none;
             z-index: 1000;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            max-width: 400px;
         }
 
         #errorMessage.show {
@@ -233,51 +396,104 @@
                 opacity: 1;
             }
         }
+
+        /* Responsive adjustments */
+        @media (max-width: 1200px) {
+            .main-container {
+                flex-direction: column;
+                height: auto;
+                overflow-y: auto;
+            }
+
+            .panel-left,
+            .panel-middle,
+            .panel-right {
+                width: 100%;
+                min-width: auto;
+                border-right: none;
+                border-bottom: 1px solid #3d3d3d;
+            }
+
+            .video-container {
+                min-height: 500px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div id="container">
-        <div id="header">
-            <h1>📱 Scrcpy Web Viewer</h1>
-            <div id="status">
-                <div class="status-indicator disconnected"></div>
-                <span id="statusText">未连接</span>
+    <div class="main-container">
+        <!-- Left: Device Connection Panel -->
+        <div class="panel-left">
+            <h2>设备连接</h2>
+
+            <!-- Step 1: Select Device -->
+            <div class="section">
+                <h3>1. 选择设备</h3>
+                <div class="input-group">
+                    <select id="deviceSelect">
+                        <option value="">-- 获取设备列表 --</option>
+                    </select>
+                    <button id="refreshDevicesBtn" class="icon-button" title="刷新设备列表">↻</button>
+                </div>
+                <button id="connectDeviceBtn">连接设备</button>
+            </div>
+
+            <!-- Step 2: Connect Socket.IO -->
+            <div class="section">
+                <h3>2. 连接 Socket.IO</h3>
+                <label>Socket.IO 地址:</label>
+                <div class="input-group">
+                    <input type="text" id="socketIp" value="127.0.0.1" placeholder="IP">
+                    <input type="number" id="socketPort" placeholder="端口" readonly>
+                </div>
+                <button id="connectSocketBtn">连接 Socket.IO</button>
+                <button id="disconnectSocketBtn" class="disconnect hidden">断开连接</button>
+            </div>
+
+            <!-- Connection Status -->
+            <div class="status-section">
+                <div class="status-item">
+                    <span class="label">设备状态:</span>
+                    <span id="deviceStatus" class="status-badge disconnected">未连接</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Socket.IO:</span>
+                    <span id="socketStatus" class="status-badge disconnected">未连接</span>
+                </div>
             </div>
         </div>
 
-        <div id="videoContainer">
-            <div id="phoneFrame">
-                <canvas id="canvas"></canvas>
-                <div id="stats"></div>
-                <div id="touchIndicator"></div>
+        <!-- Middle: Log Area -->
+        <div class="panel-middle">
+            <h2>日志信息</h2>
+            <div class="log-controls">
+                <button id="clearLogBtn" class="secondary">清空日志</button>
+                <label>
+                    <input type="checkbox" id="autoScroll" checked>
+                    自动滚动
+                </label>
             </div>
-            <div id="loadingHint" class="loading">连接中</div>
+            <div id="logContainer" class="log-container"></div>
         </div>
 
-        <div id="controls">
-            <div class="control-group">
-                <label for="socketUrl">Socket.IO URL:</label>
-                <input type="text" id="socketUrl" value="http://127.0.0.1:60482" placeholder="http://127.0.0.1:60482">
+        <!-- Right: Video Display -->
+        <div class="panel-right">
+            <h2>视频显示</h2>
+            <div id="videoContainer" class="video-container">
+                <div id="phoneFrame">
+                    <canvas id="canvas"></canvas>
+                    <div id="stats"></div>
+                    <div id="touchIndicator"></div>
+                </div>
+                <div id="loadingHint" class="loading">等待连接...</div>
             </div>
-            <button id="connectBtn">连接</button>
-            <button id="disconnectBtn" class="disconnect" style="display:none;">断开</button>
-            <div class="control-group">
-                <label>测试坐标:</label>
-                <input type="number" id="testX" value="540" style="width: 80px;" placeholder="X">
-                <input type="number" id="testY" value="960" style="width: 80px;" placeholder="Y">
-                <button id="testClickBtn" style="background: #4caf50;">测试点击</button>
-            </div>
-            <div class="control-group" style="margin-left: auto;">
-                <label>屏幕尺寸:</label>
-                <input type="number" id="screenWidth" value="1080" style="width: 80px;">
-                <span style="margin: 0 4px;">×</span>
-                <input type="number" id="screenHeight" value="1920" style="width: 80px;">
-            </div>
-            <button id="resizeBtn">应用尺寸</button>
         </div>
     </div>
 
     <div id="errorMessage"></div>
+
+    <!-- Hidden input for backward compatibility -->
+    <input type="hidden" id="socketUrl" value="">
 
     <script src="socketio-client.js"></script>
 </body>
