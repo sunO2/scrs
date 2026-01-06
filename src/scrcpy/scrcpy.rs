@@ -272,10 +272,18 @@ impl ScrcpyConnect {
             s.on("scrcpy_ctl", move |s: socketioxide::extract::SocketRef, data: socketioxide::extract::Data<Bytes>| async move {
                 info!("收到 scrcpy_ctl 事件，数据长度: {} 字节", data.0.len());
 
-                let preview_len = std::cmp::min(16, data.0.len());
-                let preview: Vec<u8> = data.0[..preview_len].to_vec();
-                let hex_str: String = preview.iter().map(|b| format!("{:02x}", b)).collect();
-                info!("数据预览 (前{}字节): {}", preview_len, hex_str);
+                // 输出完整的32字节hex数据
+                let hex_str: String = data.0.iter().map(|b| format!("{:02x}", b)).collect();
+                info!("完整数据hex: {}", hex_str);
+
+                // 解析关键字段用于调试
+                if data.0.len() >= 24 {
+                    let action = data.0[1];
+                    let x = u32::from_le_bytes([data.0[10], data.0[11], data.0[12], data.0[13]]);
+                    let y = u32::from_le_bytes([data.0[14], data.0[15], data.0[16], data.0[17]]);
+                    let pressure = u16::from_be_bytes([data.0[22], data.0[23]]);
+                    info!("解析: action={}, x={}, y={}, pressure={}", action, x, y, pressure);
+                }
 
                 let mut write_guard = scrcpy_control_write_ref.lock().await;
                 if let Some(ref mut write_half) = *write_guard {
@@ -463,7 +471,7 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
 
     // 等待 jar 文件推送和 scrcpy-server 启动
     // 推送 jar 文件可能需要一些时间，增加等待时间
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     // 创建 channel 的克隆，用于在任务间传递
     let scrcpy_data_tx_for_read = scrcpy_data_tx.clone();
@@ -565,7 +573,7 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
     });
 
     // 等待第一个 socket 建立
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // 任务 3: TCP socket 写入控制数据
     let client_socket_id_2 = client_socket_id.clone();

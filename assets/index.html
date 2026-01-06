@@ -13,10 +13,31 @@
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #1a1a1a;
-            color: #fff;
+            font-family: 'Courier New', 'Consolas', 'Monaco', 'Lucida Console', monospace;
+            background: #000000;
+            color: #00ff41;
             overflow: hidden;
+            text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
+            position: relative;
+        }
+
+        /* CRT Scanline Effect */
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15),
+                rgba(0, 0, 0, 0.15) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 9999;
         }
 
         .main-container {
@@ -27,40 +48,74 @@
 
         /* Left Panel - Device Connection */
         .panel-left {
-            width: 33.33%;
-            min-width: 300px;
+            width: 25%;
+            min-width: 250px;
             padding: 20px;
-            background: #2d2d2d;
-            border-right: 1px solid #3d3d3d;
+            background: #0a0a0a;
+            border-right: 2px solid #00ff41;
             overflow-y: auto;
+            position: relative;
         }
 
         .panel-left h2 {
             font-size: 20px;
             font-weight: 500;
             margin-bottom: 20px;
-            color: #2196f3;
+            color: #00ff41;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 2px solid #00ff41;
+            padding-bottom: 10px;
+            text-shadow: 0 0 10px #00ff41;
         }
 
         .panel-left h3 {
             font-size: 14px;
             font-weight: 500;
             margin-bottom: 10px;
-            color: #999;
+            color: #00cc33;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .section {
             margin-bottom: 25px;
             padding: 15px;
-            background: #383838;
-            border-radius: 8px;
+            background: #0f0f0f;
+            border: 1px solid #00ff41;
+            border-radius: 0;
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+            position: relative;
+        }
+
+        /* Corner decorations */
+        .section::before {
+            content: "+";
+            position: absolute;
+            top: -1px;
+            left: -1px;
+            color: #00ff41;
+            font-size: 16px;
+            text-shadow: 0 0 5px #00ff41;
+        }
+
+        .section::after {
+            content: "+";
+            position: absolute;
+            bottom: -1px;
+            right: -1px;
+            color: #00ff41;
+            font-size: 16px;
+            text-shadow: 0 0 5px #00ff41;
         }
 
         .section label {
             display: block;
             font-size: 12px;
-            color: #999;
+            color: #00cc33;
             margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .input-group {
@@ -72,13 +127,17 @@
         input[type="text"],
         input[type="number"],
         select {
-            background: #3d3d3d;
-            border: 1px solid #4d4d4d;
-            color: #fff;
-            padding: 8px 12px;
-            border-radius: 4px;
+            background: #1a1a1a;
+            border: 2px solid #00ff41;
+            color: #00ff41;
+            padding: 10px 12px;
+            border-radius: 0;
             font-size: 14px;
             box-sizing: border-box;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
+            transition: all 0.3s;
+            box-shadow: inset 0 0 10px rgba(0, 255, 65, 0.1);
         }
 
         select {
@@ -102,7 +161,8 @@
         input[type="number"]:focus,
         select:focus {
             outline: none;
-            border-color: #2196f3;
+            border-color: #00ff00;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.5), inset 0 0 10px rgba(0, 255, 65, 0.2);
         }
 
         select {
@@ -111,56 +171,85 @@
         }
 
         button {
-            background: #2196f3;
-            color: #fff;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
+            background: #003300;
+            color: #00ff41;
+            border: 2px solid #00ff41;
+            padding: 10px 16px;
+            border-radius: 0;
             cursor: pointer;
             font-size: 14px;
-            transition: background 0.2s;
+            transition: all 0.3s;
             width: 100%;
             margin-bottom: 8px;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 0 0 5px rgba(0, 255, 65, 0.8);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
         }
 
         button:hover {
-            background: #1976d2;
+            background: #00ff41;
+            color: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.8);
+            text-shadow: none;
+        }
+
+        button:active {
+            transform: scale(0.98);
         }
 
         button:disabled {
-            background: #555;
+            background: #1a1a1a;
+            color: #333;
+            border-color: #333;
             cursor: not-allowed;
+            box-shadow: none;
+            text-shadow: none;
         }
 
         button.disconnect {
-            background: #f44336;
+            background: #330000;
+            border-color: #ff0000;
+            color: #ff0000;
+            text-shadow: 0 0 5px rgba(255, 0, 0, 0.8);
         }
 
         button.disconnect:hover {
-            background: #d32f2f;
+            background: #ff0000;
+            color: #000;
+            box-shadow: 0 0 20px rgba(255, 0, 0, 0.8);
         }
 
         button.secondary {
-            background: #555;
+            background: #1a1a1a;
+            border-color: #666;
+            color: #999;
+            text-shadow: none;
         }
 
         button.secondary:hover {
-            background: #666;
+            background: #333;
+            color: #fff;
+            border-color: #999;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.3);
         }
 
         button.icon-button {
             width: auto;
-            padding: 8px 10px;
+            padding: 10px 12px;
             margin-bottom: 0;
-            font-size: 14px;
-            min-width: 40px;
+            font-size: 18px;
+            min-width: 50px;
         }
 
         .status-section {
             margin-top: 20px;
             padding: 15px;
-            background: #383838;
-            border-radius: 8px;
+            background: #0f0f0f;
+            border: 1px solid #00ff41;
+            border-radius: 0;
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
         }
 
         .status-item {
@@ -168,50 +257,74 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 10px;
+            padding: 5px 0;
+            border-bottom: 1px dashed #00ff41;
         }
 
         .status-item:last-child {
             margin-bottom: 0;
+            border-bottom: none;
         }
 
         .status-item .label {
             font-size: 14px;
-            color: #999;
+            color: #00cc33;
             margin-bottom: 0;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .status-badge {
-            padding: 4px 12px;
-            border-radius: 12px;
+            padding: 6px 16px;
+            border-radius: 0;
             font-size: 12px;
             font-weight: 500;
-            background: #666;
+            background: #1a1a1a;
+            border: 2px solid #666;
+            color: #666;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .status-badge.connected {
-            background: #4caf50;
+            background: #003300;
+            border-color: #00ff41;
+            color: #00ff41;
+            text-shadow: 0 0 10px #00ff41;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.5);
         }
 
         .status-badge.disconnected {
-            background: #f44336;
+            background: #330000;
+            border-color: #ff0000;
+            color: #ff0000;
+            text-shadow: 0 0 10px #ff0000;
+            box-shadow: 0 0 15px rgba(255, 0, 0, 0.5);
         }
 
         /* Middle Panel - Log Area */
         .panel-middle {
-            width: 33.33%;
+            width: 50%;
             min-width: 300px;
             padding: 20px;
-            background: #1a1a1a;
-            border-right: 1px solid #3d3d3d;
+            background: #000000;
+            border-right: 2px solid #00ff41;
             display: flex;
             flex-direction: column;
+            position: relative;
         }
 
         .panel-middle h2 {
             font-size: 20px;
             font-weight: 500;
             margin-bottom: 15px;
-            color: #2196f3;
+            color: #00ff41;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 2px solid #00ff41;
+            padding-bottom: 10px;
+            text-shadow: 0 0 10px #00ff41;
         }
 
         .log-controls {
@@ -231,13 +344,36 @@
             align-items: center;
             gap: 5px;
             font-size: 12px;
-            color: #999;
+            color: #00cc33;
             cursor: pointer;
             margin-bottom: 0;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .log-controls input[type="checkbox"] {
             cursor: pointer;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border: 2px solid #00ff41;
+            background: #1a1a1a;
+            position: relative;
+        }
+
+        .log-controls input[type="checkbox"]:checked {
+            background: #00ff41;
+        }
+
+        .log-controls input[type="checkbox"]:checked::after {
+            content: "✓";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #000;
+            font-size: 14px;
+            font-weight: bold;
         }
 
         .log-container {
@@ -245,94 +381,218 @@
             overflow-y: auto;
             font-family: 'Courier New', monospace;
             font-size: 12px;
-            line-height: 1.4;
+            line-height: 1.6;
             background: #000;
-            padding: 10px;
-            border-radius: 4px;
+            padding: 15px;
+            border: 2px solid #00ff41;
+            border-radius: 0;
+            position: relative;
+            box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.1);
+        }
+
+        /* Custom scrollbar */
+        .log-container::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        .log-container::-webkit-scrollbar-track {
+            background: #000;
+            border-left: 1px solid #00ff41;
+        }
+
+        .log-container::-webkit-scrollbar-thumb {
+            background: #00ff41;
+            border: 1px solid #00ff41;
+        }
+
+        .log-container::-webkit-scrollbar-thumb:hover {
+            background: #00ff00;
         }
 
         .log-entry {
-            padding: 4px 8px;
-            margin: 2px 0;
-            border-left: 3px solid #666;
+            padding: 6px 10px;
+            margin: 3px 0;
+            border-left: 3px solid #00ff41;
             word-wrap: break-word;
+            background: rgba(0, 255, 65, 0.02);
+            transition: all 0.3s;
+            color: #00ff41;
+        }
+
+        .log-entry:hover {
+            background: rgba(0, 255, 65, 0.05);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
         }
 
         .log-entry.info {
             border-left-color: #2196f3;
+            color: #2196f3;
         }
 
         .log-entry.warn {
-            border-left-color: #ff9800;
+            border-left-color: #ffaa00;
+            color: #ffaa00;
+            background: rgba(255, 170, 0, 0.02);
         }
 
         .log-entry.error {
-            border-left-color: #f44336;
+            border-left-color: #ff0000;
+            color: #ff0000;
+            background: rgba(255, 0, 0, 0.02);
         }
 
         .log-entry.success {
-            border-left-color: #4caf50;
+            border-left-color: #00ff41;
+            color: #00ff41;
+            background: rgba(0, 255, 65, 0.05);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
         }
 
         .log-timestamp {
-            color: #666;
+            color: #00cc33;
             margin-right: 8px;
+            font-weight: bold;
         }
 
         /* Right Panel - Video Display */
         .panel-right {
-            width: 33.33%;
-            min-width: 300px;
+            flex: 1;
+            min-width: 400px;
             padding: 20px;
-            background: #0d0d0d;
+            background: #000;
             display: flex;
             flex-direction: column;
-            align-items: center;
+            position: relative;
         }
 
         .panel-right h2 {
             font-size: 20px;
             font-weight: 500;
             margin-bottom: 15px;
-            color: #2196f3;
+            color: #00ff41;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 2px solid #00ff41;
+            padding-bottom: 10px;
+            text-shadow: 0 0 10px #00ff41;
         }
 
         .video-container {
             flex: 1;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            gap: 30px;
+            justify-content: flex-start;
+            align-items: flex-start;
             width: 100%;
+            padding-top: 20px;
+            padding-left: 10px;
+        }
+
+        /* Control buttons panel on the left side of video */
+        .video-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 8px;
+            background: #0a0a0a;
+            border: 2px solid #00ff41;
+            box-shadow: 0 0 12px rgba(0, 255, 65, 0.2);
+            position: relative;
+            z-index: 1000;
+        }
+
+        .video-controls h3 {
+            font-size: 9px;
+            color: #00cc33;
+            text-align: center;
+            margin: 0 0 6px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #00ff41;
+            padding-bottom: 4px;
+        }
+
+        .video-controls button {
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            margin: 0;
+            font-size: 16px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .video-controls button::before {
+            content: attr(data-icon);
+        }
+
+        .video-controls button::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 100%;
+            top: 50%;
+            transform: translateY(-50%);
+            margin-left: 10px;
+            padding: 6px 10px;
+            background: #1a1a1a;
+            border: 1px solid #00ff41;
+            color: #00ff41;
+            font-size: 10px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            text-transform: none;
+            letter-spacing: normal;
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+            z-index: 100000;
+        }
+
+        .video-controls button:hover::after {
+            opacity: 1;
+        }
+
+        .video-controls button:active {
+            transform: scale(0.95);
         }
 
         #phoneFrame {
             position: relative;
             background: #000;
             border-radius: 20px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            border: 3px solid #00ff41;
+            box-shadow: 0 0 30px rgba(0, 255, 65, 0.5);
             overflow: hidden;
             width: 100%;
-            aspect-ratio: 1080 / 1920;
-            max-width: 100%;
+            max-width: 320px;
+            aspect-ratio: 9 / 16;
+        }
+
+        /* LIVE indicator */
+        #phoneFrame::after {
+            content: "[LIVE]";
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            color: #ff0000;
+            font-size: 12px;
+            font-weight: bold;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 3px 8px;
+            border: 1px solid #ff0000;
+            z-index: 10;
         }
 
         #canvas {
             width: 100%;
             height: 100%;
             display: block;
-            cursor: pointer;
-        }
-
-        #stats {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-family: monospace;
-            pointer-events: none;
+            cursor: crosshair;
+            position: relative;
+            z-index: 9999;
         }
 
         #touchIndicator {
@@ -340,27 +600,13 @@
             width: 40px;
             height: 40px;
             border-radius: 50%;
-            background: rgba(33, 150, 243, 0.3);
-            border: 2px solid #2196f3;
+            background: rgba(0, 255, 65, 0.2);
+            border: 2px solid #00ff41;
             pointer-events: none;
             display: none;
             transform: translate(-50%, -50%);
-        }
-
-        .loading {
-            text-align: center;
-            color: #999;
-        }
-
-        .loading:after {
-            content: '...';
-            animation: dots 1.5s steps(4, end) infinite;
-        }
-
-        @keyframes dots {
-            0%, 20% { content: '.'; }
-            40% { content: '..'; }
-            60%, 100% { content: '...'; }
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.8);
+            z-index: 101;
         }
 
         .hidden {
@@ -371,14 +617,18 @@
             position: fixed;
             top: 20px;
             right: 20px;
-            background: #f44336;
-            color: #fff;
-            padding: 12px 20px;
-            border-radius: 4px;
+            background: #330000;
+            color: #ff0000;
+            padding: 15px 25px;
+            border: 3px solid #ff0000;
             display: none;
-            z-index: 1000;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            z-index: 10000;
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.5);
             max-width: 400px;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 0 0 10px #ff0000;
         }
 
         #errorMessage.show {
@@ -411,7 +661,7 @@
                 width: 100%;
                 min-width: auto;
                 border-right: none;
-                border-bottom: 1px solid #3d3d3d;
+                border-bottom: 2px solid #00ff41;
             }
 
             .video-container {
@@ -480,12 +730,20 @@
         <div class="panel-right">
             <h2>视频显示</h2>
             <div id="videoContainer" class="video-container">
+                <!-- Control buttons on the left -->
+                <div class="video-controls">
+                    <h3>控制</h3>
+                    <button id="powerToggleBtn"
+                            data-icon="⏻"
+                            data-tooltip="锁屏/解锁"
+                            title="锁屏/解锁屏幕"></button>
+                </div>
+
+                <!-- Video frame on the right -->
                 <div id="phoneFrame">
                     <canvas id="canvas"></canvas>
-                    <div id="stats"></div>
                     <div id="touchIndicator"></div>
                 </div>
-                <div id="loadingHint" class="loading">等待连接...</div>
             </div>
         </div>
     </div>

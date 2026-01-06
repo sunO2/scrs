@@ -66,8 +66,8 @@ impl ApiServer {
             .route("/disconnect", post(Self::disconnect_device))
             .route("/device/{serial}/status", get(Self::get_device_status))
             .route("/hello", get(Self::hello))
-            .route("/assets/index.html", get(Self::index_html))
-            .route("/assets/socketio-client.js", get(Self::socketio_client_js))
+            .route("/web/index.html", get(Self::index_html))
+            .route("/web/socketio-client.js", get(Self::socketio_client_js))
             .with_state(ctx);
         ApiServer { app }
     }

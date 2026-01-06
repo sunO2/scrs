@@ -177,6 +177,7 @@ let fps = 0;
 
 // Scrcpy 控制消息类型
 const SCRCPY_MSG_TYPE_INJECT_TOUCH_EVENT = 2;
+const SCRCPY_MSG_TYPE_SET_DISPLAY_POWER = 10;
 
 // Android MotionEvent 动作类型
 const ACTION_DOWN = 0;
@@ -825,16 +826,16 @@ function buildTouchEvent(action, pointerId, x, y, pressure = 1.0, actionButton =
     view.setUint8(offset, action);
     offset += 1;
 
-    // 3. 指针 ID: 8 bytes (little-endian)
-    view.setBigUint64(offset, pointerId, true);
+    // 3. 指针 ID: 8 bytes (big-endian)
+    view.setBigUint64(offset, pointerId, false);
     offset += 8;
 
-    // 4. X 坐标: 4 bytes (little-endian)
-    view.setInt32(offset, x, true);
+    // 4. X 坐标: 4 bytes (big-endian)
+    view.setInt32(offset, x, false);
     offset += 4;
 
-    // 5. Y 坐标: 4 bytes (little-endian)
-    view.setInt32(offset, y, true);
+    // 5. Y 坐标: 4 bytes (big-endian)
+    view.setInt32(offset, y, false);
     offset += 4;
 
     // 6. 屏幕宽度: 2 bytes (big-endian)
@@ -849,12 +850,12 @@ function buildTouchEvent(action, pointerId, x, y, pressure = 1.0, actionButton =
     view.setUint16(offset, floatToU16FixedPoint(pressure), false);
     offset += 2;
 
-    // 9. 动作按钮: 4 bytes (little-endian)
-    view.setInt32(offset, actionButton, true);
+    // 9. 动作按钮: 4 bytes (big-endian)
+    view.setInt32(offset, actionButton, false);
     offset += 4;
 
-    // 10. 按钮状态: 4 bytes (little-endian)
-    view.setInt32(offset, buttons, true);
+    // 10. 按钮状态: 4 bytes (big-endian)
+    view.setInt32(offset, buttons, false);
 
     return new Uint8Array(buffer);
 }
@@ -898,20 +899,72 @@ function canvasToDeviceCoords(canvasX, canvasY) {
 }
 
 /**
- * 发送触摸事件
+ * 构建屏幕电源控制消息
  */
-function sendTouchEvent(action, x, y) {
+function buildDisplayPowerMessage(on) {
+    // 消息格式 (总共 2 bytes)
+    const buffer = new ArrayBuffer(2);
+    const view = new DataView(buffer);
+
+    let offset = 0;
+
+    // 1. 类型: 1 byte (TYPE_SET_DISPLAY_POWER = 10)
+    view.setUint8(offset, SCRCPY_MSG_TYPE_SET_DISPLAY_POWER);
+    offset += 1;
+
+    // 2. 电源状态: 1 byte (0 = 锁屏, 1 = 解锁)
+    view.setUint8(offset, on ? 1 : 0);
+
+    return new Uint8Array(buffer);
+}
+
+/**
+ * 发送屏幕电源控制事件
+ * @param {boolean} on - true=解锁屏幕, false=锁屏
+ */
+function sendDisplayPowerControl(on) {
     if (!socket || !socket.connected) {
-        log('Socket.IO 未连接，无法发送事件', 'error');
+        log('Socket.IO 未连接，无法发送电源控制命令', 'warn');
         return;
     }
 
-    const message = buildTouchEvent(action, POINTER_ID, x, y, action === ACTION_UP ? 0.0 : 1.0, BUTTON_PRIMARY, action === ACTION_UP ? 0 : BUTTON_PRIMARY);
+    const message = buildDisplayPowerMessage(on);
+
+    // 调试：输出实际发送的数据
+    const hexPreview = Array.from(message).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    log(`发送电源控制: ${on ? '解锁' : '锁屏'} (hex: ${hexPreview})`, 'info');
 
     // 发送二进制数据
     socket.emit('scrcpy_ctl', message, (ack) => {
         if (ack) {
-            log(`服务器确认收到事件`, 'info');
+            log(`电源控制命令已发送`, 'success');
+        }
+    });
+}
+
+/**
+ * 发送触摸事件
+ */
+function sendTouchEvent(action, x, y) {
+    if (!socket || !socket.connected) {
+        return;
+    }
+
+    const pressure = action === ACTION_UP ? 0.0 : 1.0;
+    const actionButton = action === ACTION_UP ? 0 : BUTTON_PRIMARY;
+    const buttons = action === ACTION_UP ? 0 : BUTTON_PRIMARY;
+
+    const message = buildTouchEvent(action, POINTER_ID, x, y, pressure, actionButton, buttons);
+
+    // 调试：输出实际发送的数据
+    const hexPreview = Array.from(message.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    console.log(`发送触摸事件: action=${action}, x=${x}, y=${y}, pressure=${pressure}`);
+    console.log(`数据hex: ${hexPreview}`);
+
+    // 发送二进制数据
+    socket.emit('scrcpy_ctl', message, (ack) => {
+        if (ack) {
+            // log(`服务器确认收到事件`, 'info');
         }
     });
 }
@@ -1002,8 +1055,8 @@ function updateStatus(connected) {
  * 更新统计信息
  */
 function updateStats() {
-    const stats = document.getElementById('stats');
-    stats.textContent = `FPS: ${fps} | 帧数: ${frameCount} | 尺寸: ${canvas.width}x${canvas.height}`;
+    // const stats = document.getElementById('stats');
+    // stats.textContent = `FPS: ${fps} | 帧数: ${frameCount} | 尺寸: ${canvas.width}x${canvas.height}`;
 }
 
 /**
@@ -1058,7 +1111,7 @@ function connect() {
     });
 
     socket.on('scrcpy_ctl_ack', (data) => {
-        log(`✓ 服务器确认收到事件`, 'info');
+        // log(`✓ 服务器确认收到事件`, 'info');
     });
 
     socket.on('scrcpy_ctl_error', (data) => {
@@ -1373,6 +1426,27 @@ canvas.addEventListener('touchend', (e) => {
 });
 
 // ========== 按钮事件 ==========
+
+// 屏幕电源状态 (true = 亮屏, false = 息屏)
+let screenPowerOn = true;
+
+// 视频控制按钮事件
+document.getElementById('powerToggleBtn').addEventListener('click', () => {
+    // 切换屏幕电源状态
+    screenPowerOn = !screenPowerOn;
+
+    const powerBtn = document.getElementById('powerToggleBtn');
+
+    if (screenPowerOn) {
+        // 亮屏
+        powerBtn.setAttribute('data-tooltip', '点击锁屏');
+        sendDisplayPowerControl(true);
+    } else {
+        // 息屏
+        powerBtn.setAttribute('data-tooltip', '点击亮屏');
+        sendDisplayPowerControl(false);
+    }
+});
 
 // 设备管理事件
 document.getElementById('refreshDevicesBtn').addEventListener('click', fetchDevices);
