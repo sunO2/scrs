@@ -46,7 +46,9 @@ src/
 ├── scrcpy/              # Scrcpy 核心功能模块
 │   ├── mod.rs          # 模块导出
 │   └── scrcpy.rs       # Scrcpy 连接和会话管理
-└── device/              # 设备模块（未完全实现）
+├── logger/              # 日志模块
+│   └── mod.rs          # 设备日志记录器
+└── device/              # 设备模块（占位，未实现）
     ├── mod.rs
     ├── device.rs
     └── server.rs
@@ -109,10 +111,10 @@ use context::context::{Context, IContext};
 
 ### 2.3 结构体 (Struct) 定义
 
-**文件：[src/context/context.rs](src/context/context.rs:9-11)**
+**文件：[src/context/context.rs](src/context/context.rs:7-9)**
 ```rust
 pub struct ScrcpyServer {
-    devices: HashMap<String, ScrcpyConnect>,
+    devices: HashMap<String, Arc<ScrcpyConnect>>,
 }
 ```
 
@@ -173,9 +175,9 @@ pub fn is_device_connected(&self, serial: &str) -> bool {
 - `&str` 是字符串切片，借用字符串数据
 - 可以同时存在多个不可变借用
 
-**可变借用 - 文件：[src/context/context.rs](src/context/context.rs:35-38)**
+**可变借用 - 文件：[src/context/context.rs](src/context/context.rs:24-27)**
 ```rust
-pub fn add_device(&mut self, serial: String, connect: ScrcpyConnect) {
+pub fn add_device(&mut self, serial: String, connect: Arc<ScrcpyConnect>) {
     self.devices.insert(serial, connect);
 }
 ```
@@ -188,9 +190,9 @@ pub fn add_device(&mut self, serial: String, connect: ScrcpyConnect) {
 
 虽然本项目代码中显式使用生命周期的地方不多（得益于 Rust 的生命周期省略规则），但理解生命周期很重要。
 
-**隐式生命周期 - 文件：[src/context/context.rs](src/context/context.rs:45-48)**
+**隐式生命周期 - 文件：[src/context/context.rs](src/context/context.rs:34-37)**
 ```rust
-pub fn get_device_connect(&self, serial: &str) -> Option<&ScrcpyConnect> {
+pub fn get_device_connect(&self, serial: &str) -> Option<&Arc<ScrcpyConnect>> {
     self.devices.get(serial)
 }
 ```
@@ -208,21 +210,28 @@ pub fn get_device_connect<'a>(&'a self, serial: &str) -> Option<&'a ScrcpyConnec
 
 ### 3.4 Clone 与 Copy
 
-**Clone 使用 - 文件：[src/context/context.rs](src/context/context.rs:26-28)**
+**Clone 使用 - 项目中的模式：**
+
+虽然 `ScrcpyServer` 中没有直接的 `get_devices` 方法，但项目中使用了克隆模式处理设备标识符。
+
+**示例 - 文件：[src/api/api.rs](src/api/api.rs:97-102)**
 ```rust
-pub fn get_devices(&self) -> Vec<String> {
-    self.devices.keys().cloned().collect()
-}
+let devices: Vec<DeviceInfo> = devs.iter().map(|device: &adb_client::server::DeviceShort| {
+    DeviceInfo {
+        serial: device.identifier.clone(),  // 克隆 String
+        status: device.state.to_string(),
+    }
+}).collect();
 ```
 
 **知识点：**
-- `keys()` 返回迭代器，产生 `&String`（借用）
-- `cloned()` 将每个 `&String` 转换为 `String`（执行克隆）
-- `collect()` 将迭代器转换为 `Vec<String>`
+- `.clone()` - 创建 `String` 的深拷贝
+- `iter()` - 迭代器，产生借用 `&DeviceShort`
+- `collect()` - 将迭代器转换为 `Vec<DeviceInfo>`
 
 ### 3.5 智能指针：Arc
 
-**Arc 使用 - 文件：[src/main.rs](src/main.rs:26-29)**
+**Arc 使用 - 文件：[src/main.rs](src/main.rs:27-30)**
 ```rust
 let ctx = Arc::new(Context::new());
 let api_server: api::api::ApiServer = api::api::ApiServer::new(ctx as Arc<dyn IContext + Sync + Send>);
@@ -244,6 +253,14 @@ let api_server: api::api::ApiServer = api::api::ApiServer::new(ctx as Arc<dyn IC
    ```
    - 将具体类型转换为 trait 对象
    - `dyn` 关键字表示动态分发
+
+4. **ScrcpyServer 中的 Arc 使用 - 文件：[src/context/context.rs](src/context/context.rs:8)**
+```rust
+devices: HashMap<String, Arc<ScrcpyConnect>>,
+```
+   - 值使用 `Arc<ScrcpyConnect>` 包装
+   - 允许多个地方共享同一个 `ScrcpyConnect` 实例
+   - 避免克隆整个连接对象
 
 ---
 
@@ -399,33 +416,43 @@ while let Some(data) = scrcpy_data_rx.recv().await {
 
 ### 5.1 thiserror 库的使用
 
-**文件：[src/error.rs](src/error.rs:1-37)**
+**文件：[src/error.rs](src/error.rs:1-38)**
 ```rust
 use thiserror::Error;
 
+/// 应用程序统一错误类型
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum AppError {
+    /// 设备未找到
     #[error("设备未找到: {0}")]
     DeviceNotFound(String),
 
+    /// 设备已连接
     #[error("设备已连接: {0}")]
     DeviceAlreadyConnected(String),
 
+    /// 设备未连接
     #[error("设备未连接: {0}")]
     DeviceNotConnected(String),
 
+    /// ADB 错误
     #[error("ADB 错误: {0}")]
     AdbError(String),
 
+    /// Scrcpy 错误
     #[error("Scrcpy 错误: {0}")]
     ScrcpyError(String),
 
+    /// IO 错误
     #[error("IO 错误: {0}")]
     IoError(#[from] std::io::Error),
 
+    /// JSON 错误
     #[error("JSON 错误: {0}")]
     JsonError(#[from] serde_json::Error),
 
+    /// 未知错误
     #[error("未知错误: {0}")]
     Unknown(String),
 }
@@ -476,14 +503,6 @@ pub fn connect_device(&self, serial: String) -> Result<()> {
 
 ### 5.3 Option 与 Result 的组合使用
 
-**文件：[src/context/context.rs](src/context/context.rs:50-53)**
-```rust
-pub fn get_server_jar(&self,) -> Cursor<Cow<'static, [u8]>> {
-    let file_data = Assets::get("jar/scrcpy-server-v3.3.4.jar").unwrap();
-    return Cursor::new(file_data.data);
-}
-```
-
 **知识点：**
 1. **`Option<T>`**：表示值可能存在或不存在
    - `Some(T)` - 值存在
@@ -497,6 +516,16 @@ pub fn get_server_jar(&self,) -> Cursor<Cow<'static, [u8]>> {
    - 在 `Some`/`Ok` 时提取值
    - 在 `None`/`Err` 时 panic
    - 仅在确定不会失败时使用
+
+**示例 - 文件：[src/scrcpy/scrcpy.rs](src/scrcpy/scrcpy.rs:407-411)**
+```rust
+// 获取嵌入的 jar 文件
+let jar_data = Assets::get("jar/scrcpy-server-v3.3.4.jar");
+if jar_data.is_none() {
+    logger_jar.error("无法找到嵌入的 scrcpy-server.jar 文件");
+    return;
+}
+```
 
 ### 5.4 ? 操作符
 
@@ -526,8 +555,9 @@ async fn read_config() -> Result<String> {
 
 ### 6.1 Trait 定义与实现
 
-**文件：[src/context/context.rs](src/context/context.rs:63-67)**
+**文件：[src/context/context.rs](src/context/context.rs:47-51)**
 ```rust
+/// Context trait，定义获取服务器实例的接口
 pub trait IContext: Send + Sync {
     fn get_scrcpy(&self) -> &RwLock<ScrcpyServer>;
     fn get_adb_server(&self) -> &RwLock<ADBServer>;
@@ -544,7 +574,7 @@ pub trait IContext: Send + Sync {
    - `Send` - 可以在线程间转移所有权
    - `Sync` - 可以从多个线程访问
 
-3. **Trait 实现 - 文件：[src/context/context.rs](src/context/context.rs:85-93)**
+3. **Trait 实现 - 文件：[src/context/context.rs](src/context/context.rs:69-77)**
 ```rust
 impl IContext for Context {
     fn get_scrcpy(&self) -> &RwLock<ScrcpyServer> {
@@ -603,7 +633,7 @@ pub struct ApiResponse<T> {
 
 ### 6.4 Default Trait
 
-**文件：[src/context/context.rs](src/context/context.rs:57-61)**
+**文件：[src/context/context.rs](src/context/context.rs:41-45)**
 ```rust
 impl Default for ScrcpyServer {
     fn default() -> Self {
@@ -627,7 +657,49 @@ impl Default for ScrcpyServer {
    }
    ```
 
-### 6.5 From 和 Into trait
+### 6.5 Clone Trait 的手动实现
+
+**手动 Clone - 文件：[src/logger/mod.rs](src/logger/mod.rs:7-13)**
+```rust
+/// 设备日志记录器
+#[derive(Clone)]
+pub struct DeviceLogger {
+    device_serial: String,
+    log_path: String,
+    file_handle: Arc<std::sync::Mutex<Option<std::fs::File>>>,
+}
+```
+
+**知识点：**
+1. **`#[derive(Clone)]`**：
+   - 对于简单类型，可以派生 Clone
+   - 编译器自动实现 `clone` 方法，逐字段克隆
+
+2. **`Arc` 在 Clone 中的作用**：
+   - `String` 会被深拷贝（创建新字符串）
+   - `Arc<Mutex<...>>` 只会增加引用计数（浅拷贝）
+   - 这种组合允许结构体被克隆，但共享底层文件句柄
+
+3. **使用场景 - 文件：[src/logger/mod.rs](src/logger/mod.rs:30-58)**
+```rust
+fn write_to_file(&self, message: &str) {
+    let mut file_guard = self.file_handle.lock().unwrap();
+
+    // 如果文件句柄不存在或需要重新打开
+    if file_guard.is_none() {
+        *file_guard = Some(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.log_path)
+                .expect("无法打开日志文件"),
+        );
+    }
+    // ...
+}
+```
+
+### 6.6 From 和 Into trait
 
 虽然项目没有直接展示，但理解这些很重要：
 
@@ -1133,6 +1205,121 @@ while let Some(data) = scrcpy_data_rx.recv().await {
 
 ---
 
-**文档版本**: 1.0
-**最后更新**: 2026-01-06
+## 13. 时间处理与外部库集成
+
+### 13.1 chrono 时间库
+
+**文件：[src/logger/mod.rs](src/logger/mod.rs:46)**
+```rust
+let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+let log_line = format!("{} [{}] {}\n", timestamp, self.device_serial, message);
+```
+
+**知识点：**
+1. **`chrono::Local::now()`**：
+   - 获取本地时间
+   - 返回 `DateTime<Local>` 类型
+
+2. **`format()` 方法**：
+   - 使用 strftime 格式化时间
+   - `%Y-%m-%d %H:%M:%S%.3f` - 年-月-日 时:分:秒.毫秒
+
+3. **常用格式化占位符**：
+   - `%Y` - 四位年份
+   - `%m` - 月份 (01-12)
+   - `%d` - 日期 (01-31)
+   - `%H` - 小时 (00-23)
+   - `%M` - 分钟 (00-59)
+   - `%S` - 秒 (00-59)
+   - `%.3f` - 毫秒（3位小数）
+
+### 13.2 文件 I/O 操作
+
+**文件：[src/logger/mod.rs](src/logger/mod.rs:18-19, 36-42)**
+```rust
+// 创建目录
+std::fs::create_dir_all("logs").expect("无法创建 logs 目录");
+
+// 打开文件（追加模式）
+*file_guard = Some(
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&self.log_path)
+        .expect("无法打开日志文件"),
+);
+```
+
+**知识点：**
+1. **`create_dir_all`**：
+   - 递归创建目录
+   - 如果目录已存在，不报错
+
+2. **`OpenOptions`**：
+   - 灵活的文件打开配置
+   - `create(true)` - 文件不存在时创建
+   - `append(true)` - 追加模式写入
+
+3. **`write_all` 和 `flush`**：
+```rust
+file.write_all(log_line.as_bytes())?;
+file.flush()?;
+```
+
+---
+
+## 14. JavaScript SDK 集成
+
+本项目还提供了一个完整的 JavaScript SDK，用于 Web 端与 Rust 后端的交互。
+
+### 14.1 SDK 模块
+
+**位置：** `assets/root/sdk/`
+
+```
+sdk/
+├── index.js           # SDK 入口
+├── ScrcpyClient.js    # 完整客户端
+├── ScrcpySocket.js    # Socket.IO 连接管理
+├── VideoDecoder.js    # H.264 视频解码
+└── README.md          # SDK 使用文档
+```
+
+### 14.2 技术栈
+
+- **Socket.IO** - 实时双向通信
+- **WebCodecs API** - 硬件加速视频解码
+- **Canvas API** - 视频帧渲染
+
+### 14.3 使用示例
+
+```javascript
+import { ScrcpyClient } from './sdk/index.js';
+
+const client = new ScrcpyClient({
+    canvas: document.getElementById('canvas'),
+    onConnected: () => console.log('已连接'),
+    onFrame: (frame) => console.log('新帧:', frame)
+});
+
+await client.connect('device_serial', 3000);
+
+// 触摸控制
+client.sendTouch(client.Constants.ACTION_DOWN, 540, 960);
+client.sendTouch(client.Constants.ACTION_UP, 540, 960);
+
+// 键盘输入
+client.sendText('Hello World');
+client.sendKey(client.Constants.KEYCODE_ENTER);
+
+// 断开连接
+client.disconnect();
+```
+
+详细 API 文档请参考 `assets/root/sdk/README.md`。
+
+---
+
+**文档版本**: 1.2
+**最后更新**: 2026-01-07
 **对应项目**: scrcpy-rs
