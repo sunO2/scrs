@@ -471,7 +471,7 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
 
     // 等待 jar 文件推送和 scrcpy-server 启动
     // 推送 jar 文件可能需要一些时间，增加等待时间
-    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
 
     // 创建 channel 的克隆，用于在任务间传递
     let scrcpy_data_tx_for_read = scrcpy_data_tx.clone();
