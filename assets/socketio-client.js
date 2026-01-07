@@ -65,13 +65,26 @@ async function fetchDevices() {
 
 // 连接到设备并自动连接 Socket.IO
 async function connectToDevice() {
+    const connectBtn = document.getElementById('connectDeviceBtn');
     const deviceSerial = document.getElementById('deviceSelect').value;
+
+    // 检查是否需要断开连接
+    if (connectBtn.textContent === '断开连接') {
+        disconnectSocket();
+        updateConnectButton(false);
+        return;
+    }
+
     if (!deviceSerial) {
         log('请先选择设备', 'warn');
         return;
     }
 
     try {
+        // 禁用按钮，防止重复点击
+        connectBtn.disabled = true;
+        connectBtn.textContent = '连接中...';
+
         log(`连接到设备: ${deviceSerial}`, 'info');
         const response = await fetch(`${API_BASE()}/connect`, {
             method: 'POST',
@@ -92,8 +105,14 @@ async function connectToDevice() {
         // 自动连接 Socket.IO
         await connectToSocketIO(port);
 
+        // 更新按钮为断开连接
+        updateConnectButton(true);
+
     } catch (error) {
         log(`连接设备失败: ${error.message}`, 'error');
+        updateConnectButton(false);
+    } finally {
+        connectBtn.disabled = false;
     }
 }
 
@@ -126,6 +145,9 @@ async function connectToSocketIO(port) {
         // 更新 Socket.IO 状态点
         document.getElementById('socketStatusDot').classList.remove('disconnected');
         document.getElementById('socketStatusDot').classList.add('connected');
+
+        // 更新按钮为断开连接
+        updateConnectButton(true);
 
         // 发送测试消息
         socket.emit('test', { message: 'Hello from web client' });
@@ -172,6 +194,9 @@ async function connectToSocketIO(port) {
         // 更新 Socket.IO 状态点
         document.getElementById('socketStatusDot').classList.remove('connected');
         document.getElementById('socketStatusDot').classList.add('disconnected');
+
+        // 更新按钮为连接设备
+        updateConnectButton(false);
     });
 
     socket.on('disconnect', (reason) => {
@@ -179,6 +204,9 @@ async function connectToSocketIO(port) {
         // 更新 Socket.IO 状态点
         document.getElementById('socketStatusDot').classList.remove('connected');
         document.getElementById('socketStatusDot').classList.add('disconnected');
+
+        // 更新按钮为连接设备
+        updateConnectButton(false);
     });
 
     // 初始化解码器
@@ -211,7 +239,23 @@ function disconnectSocket() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // 更新按钮为连接设备
+    updateConnectButton(false);
+
     log('已断开连接', 'info');
+}
+
+// 更新连接按钮的状态
+function updateConnectButton(isConnected) {
+    const connectBtn = document.getElementById('connectDeviceBtn');
+
+    if (isConnected) {
+        connectBtn.textContent = '断开连接';
+        connectBtn.classList.add('disconnect');
+    } else {
+        connectBtn.textContent = '连接设备';
+        connectBtn.classList.remove('disconnect');
+    }
 }
 
 // ========== 原有的 Socket.IO 客户端代码 ==========
@@ -406,12 +450,6 @@ class H264Decoder {
 
                 // 立即关闭 frame 释放资源
                 frame.close();
-
-                // 记录解码延迟
-                const decodeLatency = performance.now() - startTime;
-                if (this.stats.decodedFrames % 30 === 0) {
-                    log(`解码延迟: ${decodeLatency.toFixed(2)}ms`, 'info');
-                }
 
                 // 更新统计信息显示
                 updateStatsDisplay({ ...this.stats });
@@ -1071,7 +1109,7 @@ class H264Decoder {
             if (this.stats.garbageBytesSkipped <= 100) { // 限制日志输出
                 const garbagePreview = Array.from(buf.slice(0, Math.min(6, skipped)))
                     .map(b => b.toString(16).padStart(2, '0')).join(' ');
-                log(`🗑️ 跳过了 ${skipped} 字节的垃圾数据 (垃圾数据: ${garbagePreview})`, 'warn');
+                // log(`🗑️ 跳过了 ${skipped} 字节的垃圾数据 (垃圾数据: ${garbagePreview})`, 'warn');
             }
             // 继续处理，不return，让i停留在第一个起始码的位置
         }
@@ -1914,7 +1952,10 @@ document.getElementById('connectDeviceBtn').addEventListener('click', connectToD
 
 // 日志控制事件
 document.getElementById('clearLogBtn').addEventListener('click', () => {
-    document.getElementById('logContainer').innerHTML = '';
+    const logContainer = document.getElementById('logContainer');
+    // 只删除日志条目，保留控件
+    const logEntries = logContainer.querySelectorAll('.log-entry');
+    logEntries.forEach(entry => entry.remove());
     log('日志已清空', 'info');
 });
 

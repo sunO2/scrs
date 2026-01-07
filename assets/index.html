@@ -46,7 +46,7 @@
             width: 100vw;
         }
 
-        /* Left Panel - Device Connection */
+        /* Left Panel - Device Connection & Log */
         .panel-left {
             width: 25%;
             min-width: 250px;
@@ -55,6 +55,9 @@
             border-right: 2px solid #00ff41;
             overflow-y: auto;
             position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }
 
         .panel-left h2 {
@@ -67,6 +70,14 @@
             border-bottom: 2px solid #00ff41;
             padding-bottom: 10px;
             text-shadow: 0 0 10px #00ff41;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-left h2 .status-indicators {
+            display: flex;
+            gap: 8px;
         }
 
         .panel-left h3 {
@@ -304,14 +315,9 @@
         }
 
         /* Status dots */
-        .status-indicators {
-            display: flex;
-            gap: 8px;
-        }
-
         .status-dot {
-            width: 16px;
-            height: 16px;
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
             border: 2px solid #666;
             background: #1a1a1a;
@@ -342,7 +348,7 @@
             }
         }
 
-        /* Middle Panel - Log Area */
+        /* Middle Panel - Reserved for Future Use */
         .panel-middle {
             width: 50%;
             min-width: 300px;
@@ -352,50 +358,68 @@
             display: flex;
             flex-direction: column;
             position: relative;
+            justify-content: center;
+            align-items: center;
         }
 
-        .panel-middle h2 {
-            font-size: 20px;
-            font-weight: 500;
-            margin-bottom: 15px;
+        .panel-middle::before {
+            content: "预留区域";
             color: #00ff41;
+            font-size: 24px;
             text-transform: uppercase;
-            letter-spacing: 2px;
-            border-bottom: 2px solid #00ff41;
-            padding-bottom: 10px;
-            text-shadow: 0 0 10px #00ff41;
+            letter-spacing: 4px;
+            opacity: 0.3;
+            text-shadow: 0 0 20px #00ff41;
+        }
+
+        .log-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
         }
 
         .log-controls {
+            position: absolute;
+            top: 6px;
+            right: 6px;
             display: flex;
-            gap: 10px;
-            margin-bottom: 10px;
+            gap: 6px;
             align-items: center;
+            z-index: 10;
+            padding: 4px 6px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #00ff41;
+            border-radius: 0;
+            backdrop-filter: blur(4px);
         }
 
         .log-controls button {
             width: auto;
             margin-bottom: 0;
+            padding: 4px 8px;
+            font-size: 10px;
+            min-width: auto;
         }
 
         .log-controls label {
             display: flex;
             align-items: center;
-            gap: 5px;
-            font-size: 12px;
+            gap: 3px;
+            font-size: 9px;
             color: #00cc33;
             cursor: pointer;
             margin-bottom: 0;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
         }
 
         .log-controls input[type="checkbox"] {
             cursor: pointer;
             appearance: none;
-            width: 18px;
-            height: 18px;
-            border: 2px solid #00ff41;
+            width: 12px;
+            height: 12px;
+            border: 1px solid #00ff41;
             background: #1a1a1a;
             position: relative;
         }
@@ -411,7 +435,7 @@
             left: 50%;
             transform: translate(-50%, -50%);
             color: #000;
-            font-size: 14px;
+            font-size: 9px;
             font-weight: bold;
         }
 
@@ -419,19 +443,20 @@
             flex: 1;
             overflow-y: auto;
             font-family: 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.6;
+            font-size: 11px;
+            line-height: 1.5;
             background: #000;
-            padding: 15px;
-            border: 2px solid #00ff41;
+            padding: 30px 8px 8px 8px;
+            border: 1px solid #00ff41;
             border-radius: 0;
             position: relative;
             box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.1);
+            min-height: 0;
         }
 
         /* Custom scrollbar */
         .log-container::-webkit-scrollbar {
-            width: 10px;
+            width: 6px;
         }
 
         .log-container::-webkit-scrollbar-track {
@@ -449,13 +474,14 @@
         }
 
         .log-entry {
-            padding: 6px 10px;
-            margin: 3px 0;
-            border-left: 3px solid #00ff41;
+            padding: 4px 6px;
+            margin: 2px 0;
+            border-left: 2px solid #00ff41;
             word-wrap: break-word;
             background: rgba(0, 255, 65, 0.02);
             transition: all 0.3s;
             color: #00ff41;
+            font-size: 11px;
         }
 
         .log-entry:hover {
@@ -489,8 +515,9 @@
 
         .log-timestamp {
             color: #00cc33;
-            margin-right: 8px;
+            margin-right: 6px;
             font-weight: bold;
+            font-size: 10px;
         }
 
         /* Right Panel - Video Display */
@@ -703,6 +730,14 @@
                 border-bottom: 2px solid #00ff41;
             }
 
+            .panel-left {
+                min-height: 400px;
+            }
+
+            .log-section {
+                min-height: 300px;
+            }
+
             .video-container {
                 min-height: 500px;
             }
@@ -713,42 +748,44 @@
     <div class="main-container">
         <!-- Left: Device Connection Panel -->
         <div class="panel-left">
-            <h2>设备连接</h2>
-
-            <!-- Device Selection and Connection -->
-            <div class="section">
-                <div class="input-group">
-                    <select id="deviceSelect">
-                        <option value="">-- 获取设备列表 --</option>
-                    </select>
-                    <button id="refreshDevicesBtn" class="icon-button" title="刷新设备列表">↻</button>
-                </div>
-                <button id="connectDeviceBtn">连接设备</button>
-            </div>
-
-            <!-- Connection Status -->
-            <div class="section">
-                <div class="status-item">
-                    <span class="label">状态:</span>
+            <!-- Device Connection Section -->
+            <div>
+                <h2>
+                    设备连接
                     <span class="status-indicators">
                         <span id="deviceStatusDot" class="status-dot disconnected" title="设备状态"></span>
                         <span id="socketStatusDot" class="status-dot disconnected" title="Socket.IO 状态"></span>
                     </span>
+                </h2>
+
+                <!-- Device Selection and Connection -->
+                <div class="section">
+                    <div class="input-group">
+                        <select id="deviceSelect">
+                            <option value="">-- 获取设备列表 --</option>
+                        </select>
+                        <button id="refreshDevicesBtn" class="icon-button" title="刷新设备列表">↻</button>
+                    </div>
+                    <button id="connectDeviceBtn">连接设备</button>
+                </div>
+            </div>
+
+            <!-- Log Section -->
+            <div class="log-section">
+                <div id="logContainer" class="log-container">
+                    <div class="log-controls">
+                        <button id="clearLogBtn" class="secondary">清空</button>
+                        <label>
+                            <input type="checkbox" id="autoScroll" checked>
+                            自动滚动
+                        </label>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Middle: Log Area -->
+        <!-- Middle: Reserved for Future Use -->
         <div class="panel-middle">
-            <h2>日志信息</h2>
-            <div class="log-controls">
-                <button id="clearLogBtn" class="secondary">清空日志</button>
-                <label>
-                    <input type="checkbox" id="autoScroll" checked>
-                    自动滚动
-                </label>
-            </div>
-            <div id="logContainer" class="log-container"></div>
         </div>
 
         <!-- Right: Video Display -->
