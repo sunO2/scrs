@@ -46,21 +46,48 @@
             width: 100vw;
         }
 
-        /* Left Panel - Device Connection & Log */
-        .panel-left {
-            width: 25%;
-            min-width: 250px;
+        /* Panel Styles - Three Columns */
+        .panel-left,
+        .panel-center,
+        .panel-right {
+            height: 100vh;
             padding: 20px;
             background: #0a0a0a;
-            border-right: 2px solid #00ff41;
             overflow-y: auto;
             position: relative;
+        }
+
+        /* Left Panel - Device Connection (30%) */
+        .panel-left {
+            width: 30%;
+            min-width: 250px;
+            border-right: 2px solid #00ff41;
             display: flex;
             flex-direction: column;
             gap: 20px;
         }
 
-        .panel-left h2 {
+        /* Center Panel - Video Display (30%) */
+        .panel-center {
+            width: 30%;
+            min-width: 250px;
+            border-right: 2px solid #00ff41;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Right Panel - Chat Area (40%) */
+        .panel-right {
+            flex: 1;
+            min-width: 320px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .panel-left h2,
+        .panel-center h2,
+        .panel-right h2 {
             font-size: 20px;
             font-weight: 500;
             margin-bottom: 20px;
@@ -388,61 +415,34 @@
             font-size: 10px;
         }
 
-        /* Right Panel - Video Display */
-        .panel-right {
-            flex: 1;
-            min-width: 400px;
-            padding: 20px;
-            background: #000;
-            display: flex;
-            flex-direction: column;
-            position: relative;
-        }
-
-        .panel-right h2 {
-            font-size: 20px;
-            font-weight: 500;
-            margin-bottom: 15px;
-            color: #00ff41;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-            border-bottom: 2px solid #00ff41;
-            padding-bottom: 10px;
-            text-shadow: 0 0 10px #00ff41;
-        }
-
+        /* Video Container */
         .video-container {
             flex: 1;
             display: flex;
-            gap: 30px;
-            justify-content: flex-start;
+            flex-direction: row;
+            gap: 20px;
+            justify-content: center;
             align-items: flex-start;
             width: 100%;
-            padding-top: 20px;
-            padding-left: 10px;
+            padding-top: 10px;
+            padding-bottom: 20px;
         }
 
         .video-controls {
             display: flex;
             flex-direction: column;
-            gap: 6px;
-            padding: 8px;
+            gap: 10px;
+            padding: 10px;
             background: #0a0a0a;
             border: 2px solid #00ff41;
             box-shadow: 0 0 12px rgba(0, 255, 65, 0.2);
             position: relative;
             z-index: 1000;
+            width: auto;
         }
 
         .video-controls h3 {
-            font-size: 9px;
-            color: #00cc33;
-            text-align: center;
-            margin: 0 0 6px 0;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 1px solid #00ff41;
-            padding-bottom: 4px;
+            display: none;
         }
 
         .video-controls button {
@@ -499,7 +499,8 @@
             border: 3px solid #00ff41;
             box-shadow: 0 0 30px rgba(0, 255, 65, 0.5);
             overflow: hidden;
-            /* 宽高由 JavaScript 动态设置 */
+            /* 宽高由 JavaScript 动态设置，但限制最大高度 */
+            max-height: 85vh;
             box-sizing: border-box;
         }
 
@@ -575,6 +576,164 @@
             }
         }
 
+        /* 对话区域样式 */
+        .chat-panel-full {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #0f0f0f;
+            border: 2px solid #00ff41;
+            box-shadow: 0 0 12px rgba(0, 255, 65, 0.2);
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            background: #000;
+            min-height: 0;
+        }
+
+        .chat-messages::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-messages::-webkit-scrollbar-track {
+            background: #000;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #00ff41;
+            border: 1px solid #00ff41;
+        }
+
+        .chat-message {
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            background: #0f0f0f;
+            border-left: 3px solid #00ff41;
+            border-radius: 0;
+            animation: slideInLeft 0.3s ease;
+        }
+
+        @keyframes slideInLeft {
+            from {
+                transform: translateX(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .chat-message.system {
+            border-left-color: #2196f3;
+            background: rgba(33, 150, 243, 0.05);
+        }
+
+        .chat-message.user {
+            border-left-color: #00ff41;
+            background: rgba(0, 255, 65, 0.05);
+        }
+
+        .chat-message .time {
+            font-size: 10px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .chat-message .content {
+            font-size: 13px;
+            color: #00ff41;
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+
+        .chat-message.system .content {
+            color: #2196f3;
+        }
+
+        .chat-input-area {
+            padding: 12px;
+            background: #0f0f0f;
+            border-top: 2px solid #00ff41;
+            display: flex;
+            gap: 8px;
+            position: relative;
+        }
+
+        .chat-input-wrapper {
+            flex: 1;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-input-area textarea {
+            flex: 1;
+            width: 100%;
+            min-height: 60px;
+            max-height: 120px;
+            background: #1a1a1a;
+            border: 2px solid #00ff41;
+            color: #00ff41;
+            padding: 10px 45px 35px 12px;
+            border-radius: 0;
+            font-size: 13px;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
+            transition: all 0.3s;
+            resize: none;
+            overflow-y: hidden;
+            box-sizing: border-box;
+            line-height: 1.4;
+        }
+
+        .chat-input-area textarea:focus {
+            outline: none;
+            border-color: #00ff00;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.5), inset 0 0 10px rgba(0, 255, 65, 0.2);
+        }
+
+        .chat-input-area textarea::placeholder {
+            color: #006622;
+        }
+
+        .chat-send-btn {
+            position: absolute;
+            bottom: 5px;
+            right: 16px;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            background: transparent;
+            border: none;
+            color: #00ff41;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+            border-radius: 4px;
+        }
+
+        .chat-send-btn:hover {
+            background: rgba(0, 255, 65, 0.1);
+            color: #00ff00;
+        }
+
+        .chat-send-btn:active {
+            transform: scale(0.95);
+        }
+
+        .chat-send-btn::before {
+            content: "➤";
+        }
+
         /* Responsive adjustments */
         @media (max-width: 1200px) {
             .main-container {
@@ -584,12 +743,14 @@
             }
 
             .panel-left,
+            .panel-center,
             .panel-right {
                 width: 100%;
                 min-width: auto;
             }
 
-            .panel-left {
+            .panel-left,
+            .panel-center {
                 min-height: 400px;
             }
 
@@ -639,11 +800,11 @@
             </div>
         </div>
 
-        <!-- Right: Video Display -->
-        <div class="panel-right">
+        <!-- Center: Video Display -->
+        <div class="panel-center">
             <h2>视频显示</h2>
             <div id="videoContainer" class="video-container">
-                <!-- Control buttons on the left -->
+                <!-- Control buttons -->
                 <div class="video-controls">
                     <h3>控制</h3>
                     <button id="powerToggleBtn"
@@ -652,10 +813,29 @@
                             title="锁屏/解锁屏幕"></button>
                 </div>
 
-                <!-- Video frame on the right -->
+                <!-- Video frame -->
                 <div id="phoneFrame">
                     <canvas id="canvas"></canvas>
                     <div id="touchIndicator"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Chat Area -->
+        <div class="panel-right">
+            <h2>对话区域</h2>
+            <div class="chat-panel-full">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-message system">
+                        <div class="time">系统</div>
+                        <div class="content">欢迎使用对话区域</div>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <div class="chat-input-wrapper">
+                        <textarea id="chatInput" placeholder="输入消息..."></textarea>
+                        <button id="sendChatBtn" class="chat-send-btn"></button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1093,6 +1273,56 @@
             const logEntries = logContainer.querySelectorAll('.log-entry');
             logEntries.forEach(entry => entry.remove());
             log('日志已清空', 'info');
+        });
+
+        // ========== 对话区域功能 ==========
+        function addChatMessage(content, type = 'user') {
+            const chatMessages = document.getElementById('chatMessages');
+            const timestamp = new Date().toLocaleTimeString();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${type}`;
+            messageDiv.innerHTML = `
+                <div class="time">${timestamp}</div>
+                <div class="content">${escapeHtml(content)}</div>
+            `;
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function sendChatMessage() {
+            const chatInput = document.getElementById('chatInput');
+            const message = chatInput.value.trim();
+
+            if (!message) return;
+
+            // 添加用户消息
+            addChatMessage(message, 'user');
+
+            // TODO: 这里可以通过 Socket.IO 发送消息到服务器
+            // if (client && client.isConnected()) {
+            //     client.sendChatMessage(message);
+            // }
+
+            // 清空输入框
+            chatInput.value = '';
+
+            // 模拟系统回复（可选）
+            setTimeout(() => {
+                addChatMessage('收到消息: ' + message, 'system');
+            }, 500);
+        }
+
+        // 发送按钮点击事件
+        document.getElementById('sendChatBtn').addEventListener('click', sendChatMessage);
+
+        // 输入框回车发送（Shift+Enter换行，Enter发送）
+        document.getElementById('chatInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
+            }
         });
 
         // ========== 窗口大小改变时重新计算显示尺寸 ==========
