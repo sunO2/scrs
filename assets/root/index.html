@@ -277,6 +277,7 @@
             display: flex;
             flex-direction: column;
             min-height: 0;
+            position: relative;
         }
 
         .log-controls {
@@ -788,15 +789,14 @@
 
             <!-- Log Section -->
             <div class="log-section">
-                <div id="logContainer" class="log-container">
-                    <div class="log-controls">
-                        <button id="clearLogBtn" class="secondary">清空</button>
-                        <label>
-                            <input type="checkbox" id="autoScroll" checked>
-                            自动滚动
-                        </label>
-                    </div>
+                <div class="log-controls">
+                    <button id="clearLogBtn" class="secondary">清空</button>
+                    <label>
+                        <input type="checkbox" id="autoScroll" checked>
+                        自动滚动
+                    </label>
                 </div>
+                <div id="logContainer" class="log-container"></div>
             </div>
         </div>
 
