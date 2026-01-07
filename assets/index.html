@@ -715,24 +715,19 @@
         <div class="panel-left">
             <h2>设备连接</h2>
 
-            <!-- Step 1: Select Device -->
+            <!-- Device Selection and Connection -->
             <div class="section">
-                <h3>1. 选择设备</h3>
                 <div class="input-group">
                     <select id="deviceSelect">
                         <option value="">-- 获取设备列表 --</option>
                     </select>
                     <button id="refreshDevicesBtn" class="icon-button" title="刷新设备列表">↻</button>
                 </div>
+                <button id="connectDeviceBtn">连接设备</button>
             </div>
 
-            <!-- Connection Info -->
+            <!-- Connection Status -->
             <div class="section">
-                <h3>2. 连接信息</h3>
-                <div class="status-item">
-                    <span class="label">端口:</span>
-                    <span id="socketPortDisplay" class="status-badge">--</span>
-                </div>
                 <div class="status-item">
                     <span class="label">状态:</span>
                     <span class="status-indicators">
@@ -740,7 +735,6 @@
                         <span id="socketStatusDot" class="status-dot disconnected" title="Socket.IO 状态"></span>
                     </span>
                 </div>
-                <button id="connectDeviceBtn">连接设备</button>
             </div>
         </div>
 
