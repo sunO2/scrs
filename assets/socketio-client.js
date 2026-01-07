@@ -277,7 +277,7 @@ let fps = 0;
 const SCRCPY_MSG_TYPE_INJECT_KEYCODE = 0;   // 按键代码事件
 const SCRCPY_MSG_TYPE_INJECT_TEXT = 1;      // 文本输入事件
 const SCRCPY_MSG_TYPE_INJECT_TOUCH_EVENT = 2;  // 触摸事件
-const SCRCPY_MSG_TYPE_SET_DISPLAY_POWER = 9;  // 设置电源 (根据枚举位置)
+const SCRCPY_MSG_TYPE_SET_DISPLAY_POWER = 10;  // 设置电源 (根据枚举位置)
 
 // Android 按键动作
 const KEY_ACTION_DOWN = 0;
