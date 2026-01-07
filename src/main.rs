@@ -2,6 +2,7 @@ mod api;
 mod context;
 mod error;
 mod scrcpy;
+mod logger;
 
 use std::sync::Arc;
 use tracing::{info, error};

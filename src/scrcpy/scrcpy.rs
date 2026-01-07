@@ -3,7 +3,6 @@ use socketioxide::{SocketIo, socket::DisconnectReason};
 use bytes::Bytes;
 use std::net::TcpListener;
 use std::sync::Arc;
-use std::io::Write as StdWrite;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -13,6 +12,7 @@ use tower_http::cors::{CorsLayer, Any};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use rust_embed::RustEmbed;
+use crate::logger::DeviceLogger;
 
 /// 嵌入的资源文件
 #[derive(RustEmbed)]
@@ -139,11 +139,6 @@ impl ScrcpySessionTasks {
         info!("添加客户端, 当前客户端数: {}", self.connected_clients.len());
     }
 
-    /// 检查是否有任何已连接的客户端
-    fn has_clients(&self) -> bool {
-        !self.connected_clients.is_empty()
-    }
-
     /// 检查会话是否正在运行
     fn is_session_running(&self) -> bool {
         self.scrcpy_jar_handle.is_some()
@@ -164,10 +159,10 @@ struct ScrcpySessionState {
     device: Arc<ADBServerDevice>,
     /// scrcpy-server.jar 端口
     scrcpy_server_port: u16,
-    /// Socket.IO 端口
-    socket_io_port: u16,
     /// Socket.IO 引用 (用于广播)
     io: Arc<SocketIo>,
+    /// 设备日志记录器
+    logger: Arc<DeviceLogger>,
 }
 
 pub struct ScrcpyConnect {
@@ -176,13 +171,6 @@ pub struct ScrcpyConnect {
 }
 
 impl ScrcpyConnect {
-
-    pub fn default(port: u16,scrcpy_server_port: u16) -> ScrcpyConnect{
-        ScrcpyConnect{
-            port,
-            scrcpy_server_port
-        }
-    }
 
     pub fn new(scrcpy_server_port: u16) -> ScrcpyConnect {
         // 动态分配可用端口
@@ -207,10 +195,18 @@ impl ScrcpyConnect {
     /**
      * 运行连接 - 事件驱动模式
      * Socket.IO 服务器持续运行，scrcpy-server 在客户端连接时启动
+     * 注意：调用此方法前，需要确保 ADB 端口转发已设置
      */
     pub async fn run(self: Arc<Self>, device: Arc<ADBServerDevice>) {
-        let socket_io_port = self.port;
         let scrcpy_server_port = self.scrcpy_server_port;
+        let socket_io_port = self.port;
+
+        // 获取设备序列号用于日志
+        let device_serial = device.identifier.as_ref().map(|s| s.as_str()).unwrap_or("unknown");
+
+        // 创建设备日志记录器
+        let logger = Arc::new(DeviceLogger::new(device_serial));
+        logger.info(&format!("初始化 Socket.IO 服务器，端口: {}", socket_io_port));
 
         // 创建 Socket.IO 服务器
         let (layer, io) = SocketIo::new_layer();
@@ -221,8 +217,8 @@ impl ScrcpyConnect {
             session: Arc::new(Mutex::new(ScrcpySessionTasks::new())),
             device,
             scrcpy_server_port,
-            socket_io_port,
             io: io.clone(),
+            logger: logger.clone(),
         });
 
         let cors = CorsLayer::new()
@@ -242,10 +238,13 @@ impl ScrcpyConnect {
 
         // 设置事件处理器
         let state_clone = session_state.clone();
+        let logger_clone = Arc::clone(&logger);
         io.ns("/", move |s: socketioxide::extract::SocketRef| async move {
             let state = state_clone.clone();
             let socket_id = s.id.to_string();
+            let logger_events = Arc::clone(&logger_clone);
 
+            logger_events.info(&format!("客户端连接: {}", socket_id));
             info!("客户端连接: {}", socket_id);
 
             // 获取 scrcpy_control_write 引用用于事件处理器
@@ -269,11 +268,15 @@ impl ScrcpyConnect {
 
             // scrcpy_ctl 事件处理器
             let scrcpy_control_write_ref = scrcpy_control_write.clone();
+            let logger_ctl = Arc::clone(&logger_events);
+            let socket_id_ctl = socket_id.clone();
             s.on("scrcpy_ctl", move |s: socketioxide::extract::SocketRef, data: socketioxide::extract::Data<Bytes>| async move {
+                logger_ctl.debug(&format!("收到 scrcpy_ctl 事件 (客户端: {})，数据长度: {} 字节", socket_id_ctl, data.0.len()));
                 info!("收到 scrcpy_ctl 事件，数据长度: {} 字节", data.0.len());
 
                 // 输出完整的32字节hex数据
                 let hex_str: String = data.0.iter().map(|b| format!("{:02x}", b)).collect();
+                logger_ctl.debug(&format!("完整数据hex: {}", hex_str));
                 info!("完整数据hex: {}", hex_str);
 
                 // 解析关键字段用于调试
@@ -282,18 +285,21 @@ impl ScrcpyConnect {
                     let x = u32::from_le_bytes([data.0[10], data.0[11], data.0[12], data.0[13]]);
                     let y = u32::from_le_bytes([data.0[14], data.0[15], data.0[16], data.0[17]]);
                     let pressure = u16::from_be_bytes([data.0[22], data.0[23]]);
+                    logger_ctl.debug(&format!("解析控制指令: action={}, x={}, y={}, pressure={}", action, x, y, pressure));
                     info!("解析: action={}, x={}, y={}, pressure={}", action, x, y, pressure);
                 }
 
                 let mut write_guard = scrcpy_control_write_ref.lock().await;
                 if let Some(ref mut write_half) = *write_guard {
                     if let Err(e) = write_half.write_all(&data.0).await {
+                        logger_ctl.error(&format!("写入 scrcpy control socket 失败: {:?}", e));
                         error!("写入 scrcpy control socket 失败: {:?}", e);
                         let _ = s.emit("scrcpy_ctl_error", &serde_json::json!({
                             "error": format!("写入失败: {:?}", e),
                             "length": data.0.len()
                         }));
                     } else {
+                        logger_ctl.debug(&format!("成功写入 scrcpy control socket，长度: {} 字节", data.0.len()));
                         debug!("成功写入 scrcpy control socket，长度: {} 字节", data.0.len());
                         let _ = s.emit("scrcpy_ctl_ack", &serde_json::json!({
                             "status": "ok",
@@ -301,6 +307,7 @@ impl ScrcpyConnect {
                         }));
                     }
                 } else {
+                    logger_ctl.warn("Scrcpy control socket 写句柄未就绪");
                     warn!("Scrcpy control socket 写句柄未就绪");
                     let _ = s.emit("scrcpy_ctl_error", &serde_json::json!({
                         "error": "control socket 未就绪",
@@ -317,8 +324,10 @@ impl ScrcpyConnect {
             });
 
             // 断开连接处理器 - 停止 scrcpy 会话
+            let logger_disconnect = Arc::clone(&logger_events);
             s.on_disconnect(move |s: socketioxide::extract::SocketRef, _reason: DisconnectReason| async move {
                 let socket_id = s.id.to_string();
+                logger_disconnect.info(&format!("客户端断开连接: {}", socket_id));
                 info!("客户端断开连接: {}", socket_id);
 
                 let mut session = state.session.lock().await;
@@ -327,9 +336,12 @@ impl ScrcpyConnect {
                 let should_abort = session.remove_client(&socket_id);
 
                 if should_abort {
+                    logger_disconnect.warn(&format!("最后一个客户端断开，中止 scrcpy 会话: {}", socket_id));
                     info!("最后一个客户端断开，中止 scrcpy 会话: {}", socket_id);
                     session.abort_all().await;
                 } else {
+                    logger_disconnect.info(&format!("客户端 {} 断开，但仍有 {} 个客户端连接，会话继续",
+                          socket_id, session.connected_clients.len()));
                     info!("客户端 {} 断开，但仍有 {} 个客户端连接，会话继续",
                           socket_id, session.connected_clients.len());
                 }
@@ -367,7 +379,7 @@ async fn handle_client_connect(state: Arc<ScrcpySessionState>, socket_id: String
 
 /// 启动 scrcpy 会话的所有任务
 async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: String) {
-    info!("为客户端 {} 启动 scrcpy 会话", client_socket_id);
+    state.logger.info(&format!("为客户端 {} 启动 scrcpy 会话", client_socket_id));
 
     // 创建通信通道
     let (scrcpy_data_tx, mut scrcpy_data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -376,34 +388,25 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
     let device = Arc::clone(&state.device);
     let io = Arc::clone(&state.io);
     let socket_addr = format!("127.0.0.1:{}", state.scrcpy_server_port);
+    let logger = Arc::clone(&state.logger);
 
     // 任务 1: 启动 scrcpy-server.jar (使用 ADB shell 命令)
     let device_identifier = device.identifier.clone();
     let client_socket_id_jar = client_socket_id.clone();
+    let logger_jar = Arc::clone(&logger);
+    let scrcpy_server_port = state.scrcpy_server_port;
     let scrcpy_jar_handle = tokio::spawn(async move {
         let device_serial = device_identifier.unwrap();
 
-        // 创建 logs 目录（如果不存在）
-        if let Err(e) = std::fs::create_dir_all("logs") {
-            error!("创建 logs 目录失败: {:?}", e);
-        }
-
-        let log_path = format!("logs/ws_{}.log", device_serial);
-        let mut log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path).unwrap();
-
-        info!("客户端 {} 的 scrcpy jar 任务启动，日志: {}", client_socket_id_jar, log_path);
+        logger_jar.info(&format!("scrcpy jar 任务启动 (客户端: {})", client_socket_id_jar));
 
         // 步骤 1: 推送 scrcpy-server.jar 到设备
-        info!("客户端 {} 正在推送 scrcpy-server.jar 到设备 {}", client_socket_id_jar, device_serial);
+        logger_jar.info(&format!("正在推送 scrcpy-server.jar 到设备 {}", device_serial));
 
         // 获取嵌入的 jar 文件
         let jar_data = Assets::get("jar/scrcpy-server-v3.3.4.jar");
         if jar_data.is_none() {
-            error!("无法找到嵌入的 scrcpy-server.jar 文件");
-            let _ = writeln!(&mut log_file, "错误: 无法找到嵌入的 scrcpy-server.jar 文件");
+            logger_jar.error("无法找到嵌入的 scrcpy-server.jar 文件");
             return;
         }
 
@@ -412,12 +415,47 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
         // 先将 jar 文件写入临时文件
         let temp_jar_path = format!("/tmp/scrcpy-server-{}.jar", client_socket_id_jar);
         if let Err(e) = std::fs::write(&temp_jar_path, &jar_data) {
-            error!("写入临时 jar 文件失败: {:?}", e);
-            let _ = writeln!(&mut log_file, "写入临时 jar 文件失败: {:?}", e);
+            logger_jar.error(&format!("写入临时 jar 文件失败: {:?}", e));
             return;
         }
 
-        info!("临时 jar 文件已创建: {}", temp_jar_path);
+        logger_jar.debug(&format!("临时 jar 文件已创建: {}", temp_jar_path));
+
+        // 删除所有的端口转发
+        logger_jar.debug("删除所有的 forward tcp");
+        let forward_remove_result = tokio::process::Command::new("adb")
+            .args(["-s", &device_serial, "forward", "--remove-all"])
+            .output()
+            .await;
+        match &forward_remove_result {
+            Ok(output) => {
+                if !output.status.success() {
+                    logger_jar.warn(&format!("删除端口转发失败: {:?}", String::from_utf8_lossy(&output.stderr)));
+                }
+            }
+            Err(e) => {
+                logger_jar.warn(&format!("删除端口转发命令执行失败: {:?}", e));
+            }
+        }
+
+        // 设置端口转发
+        logger_jar.debug(&format!("设置端口转发: tcp:{} -> localabstract:scrcpy", scrcpy_server_port));
+        let forward_result = tokio::process::Command::new("adb")
+            .args(["-s", &device_serial, "forward", &format!("tcp:{}", scrcpy_server_port), "localabstract:scrcpy"])
+            .output()
+            .await;
+        match &forward_result {
+            Ok(output) => {
+                if !output.status.success() {
+                    logger_jar.warn(&format!("设置端口转发失败: {:?}", String::from_utf8_lossy(&output.stderr)));
+                } else {
+                    logger_jar.info(&format!("端口转发设置成功: tcp:{}", scrcpy_server_port));
+                }
+            }
+            Err(e) => {
+                logger_jar.warn(&format!("设置端口转发命令执行失败: {:?}", e));
+            }
+        }
 
         // 使用 adb push 推送 jar 文件 (指定设备)
         let push_result = tokio::process::Command::new("adb")
@@ -428,17 +466,14 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
         match &push_result {
             Ok(output) => {
                 if output.status.success() {
-                    info!("推送 scrcpy-server.jar 到设备 {} 成功", device_serial);
-                    let _ = writeln!(&mut log_file, "推送 scrcpy-server.jar 成功");
+                    logger_jar.info("推送 scrcpy-server.jar 成功");
                 } else {
-                    error!("推送 scrcpy-server.jar 失败: {:?}", String::from_utf8_lossy(&output.stderr));
-                    let _ = writeln!(&mut log_file, "推送失败: {:?}", String::from_utf8_lossy(&output.stderr));
+                    logger_jar.error(&format!("推送失败: {:?}", String::from_utf8_lossy(&output.stderr)));
                     return;
                 }
             }
             Err(e) => {
-                error!("执行 adb push 失败: {:?}", e);
-                let _ = writeln!(&mut log_file, "adb push 执行失败: {:?}", e);
+                logger_jar.error(&format!("adb push 执行失败: {:?}", e));
                 return;
             }
         }
@@ -446,7 +481,7 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
         // 步骤 2: 启动 scrcpy-server
         let command = "CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 3.3.4 log_level=info audio=false max_size=1920 tunnel_forward=true";
 
-        info!("客户端 {} 正在为设备 {} 启动 scrcpy-server", client_socket_id_jar, device_serial);
+        logger_jar.info(&format!("正在为设备 {} 启动 scrcpy-server", device_serial));
 
         let result = tokio::process::Command::new("adb")
             .args(["-s", &device_serial, "shell", command])
@@ -455,19 +490,17 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
 
         match result {
             Ok(output) => {
-                if let Err(e) = log_file.write_all(&output.stdout) {
-                    error!("写入 scrcpy jar 日志失败: {:?}", e);
+                // 将 stdout 和 stderr 写入日志文件
+                if !output.stdout.is_empty() {
+                    logger_jar.info(&format!("scrcpy-server stdout: {}", String::from_utf8_lossy(&output.stdout)));
                 }
                 if !output.stderr.is_empty() {
-                    if let Err(e) = log_file.write_all(&output.stderr) {
-                        error!("写入 scrcpy jar 错误日志失败: {:?}", e);
-                    }
+                    logger_jar.error(&format!("scrcpy-server stderr: {}", String::from_utf8_lossy(&output.stderr)));
                 }
-                info!("客户端 {} 的 scrcpy jar 任务完成，退出码: {:?}", client_socket_id_jar, output.status);
+                logger_jar.info(&format!("scrcpy jar 任务完成，退出码: {:?}", output.status));
             }
             Err(e) => {
-                error!("启动 scrcpy jar 失败: {:?}", e);
-                let _ = writeln!(&mut log_file, "启动失败: {:?}", e);
+                logger_jar.error(&format!("启动 scrcpy jar 失败: {:?}", e));
             }
         }
 
@@ -487,15 +520,20 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
     // 任务 2: TCP socket 读取数据
     let socket_addr_1 = socket_addr.clone();
     let client_socket_id_1 = client_socket_id.clone();
+    let logger_read = Arc::clone(&logger);
     let socket_read_handle = tokio::spawn(async move {
+        logger_read.debug(&format!("客户端 {} 尝试连接 socket read", client_socket_id_1));
+
         let stream = match TcpStream::connect(&socket_addr_1).await {
             Ok(s) => s,
             Err(e) => {
+                logger_read.error(&format!("socket read 连接失败: {:?}", e));
                 error!("客户端 {} 的 socket read 连接失败: {:?}", client_socket_id_1, e);
                 return;
             }
         };
 
+        logger_read.info(&format!("socket read 连接成功 (客户端: {})", client_socket_id_1));
         info!("客户端 {} 的 socket read 连接成功", client_socket_id_1);
 
         let mut read = stream;
@@ -511,13 +549,16 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
                     // 读取 1 字节确认消息
                     match read.read_exact(&mut ack_buf).await {
                         Ok(_) => {
+                            logger_read.debug(&format!("收到 scrcpy socket 确认字节: {}", ack_buf[0]));
                             info!("收到 scrcpy socket 确认字节: {}", ack_buf[0]);
                             if ack_buf[0] != 0 {
+                                logger_read.warn(&format!("意外的确认字节: {}", ack_buf[0]));
                                 warn!("意外的确认字节: {}", ack_buf[0]);
                             }
                             state = ReadState::ReadMeta;
                         }
                         Err(e) => {
+                            logger_read.error(&format!("读取确认字节失败: {:?}", e));
                             error!("读取确认字节失败: {:?}", e);
                             break;
                         }
@@ -532,10 +573,12 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
                                 .trim_end_matches('\0')
                                 .to_string();
 
+                            logger_read.info(&format!("收到设备元数据: {} ({} 字节)", device_name, meta_buf.len()));
                             info!("收到设备元数据: {} ({} 字节)", device_name, meta_buf.len());
 
                             // 通过 scrcpy_device_meta 事件发送设备元数据
                             if let Err(e) = io_for_read.emit("scrcpy_device_meta", &device_name).await {
+                                logger_read.error(&format!("发送设备元数据失败: {:?}", e));
                                 error!("发送设备元数据失败: {:?}", e);
                             }
 
@@ -548,6 +591,7 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
                             state = ReadState::ReadData;
                         }
                         Err(e) => {
+                            logger_read.error(&format!("读取设备元数据失败: {:?}", e));
                             error!("读取设备元数据失败: {:?}", e);
                             break;
                         }
@@ -558,17 +602,20 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
                     let mut buf = vec![0; 8192];
                     match read.read(&mut buf).await {
                         Ok(0) => {
+                            logger_read.warn(&format!("socket read 连接关闭"));
                             warn!("客户端 {} 的 socket read 连接关闭", client_socket_id_1);
                             break;
                         }
                         Ok(n) => {
                             let data = buf[..n].to_vec();
                             if let Err(e) = scrcpy_data_tx_for_read.send(data) {
+                                logger_read.error(&format!("发送数据到 channel 失败: {:?}", e));
                                 error!("发送数据到 channel 失败: {:?}", e);
                                 break;
                             }
                         }
                         Err(e) => {
+                            logger_read.error(&format!("读取 scrcpy socket 数据错误: {:?}", e));
                             error!("读取 scrcpy socket 数据错误: {:?}", e);
                             break;
                         }
@@ -583,20 +630,26 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
 
     // 任务 3: TCP socket 写入控制数据
     let client_socket_id_2 = client_socket_id.clone();
+    let logger_write = Arc::clone(&logger);
     let socket_write_handle = tokio::spawn(async move {
+        logger_write.debug(&format!("客户端 {} 尝试连接 socket write", client_socket_id_2));
+
         let stream = match TcpStream::connect(&socket_addr).await {
             Ok(s) => s,
             Err(e) => {
+                logger_write.error(&format!("socket write 连接失败: {:?}", e));
                 error!("客户端 {} 的 socket write 连接失败: {:?}", client_socket_id_2, e);
                 return;
             }
         };
 
+        logger_write.info(&format!("socket write 连接成功 (客户端: {})", client_socket_id_2));
         info!("客户端 {} 的 socket write 连接成功", client_socket_id_2);
 
         let write = stream.into_split().1;
         let mut write_guard = scrcpy_control_write.lock().await;
         *write_guard = Some(write);
+        logger_write.info(&format!("control socket 就绪 (客户端: {})", client_socket_id_2));
         info!("客户端 {} 的 control socket 就绪", client_socket_id_2);
         drop(write_guard);
 
@@ -606,7 +659,9 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
 
     // 任务 4: Socket.IO 广播
     let client_socket_id_3 = client_socket_id.clone();
+    let logger_broadcast = Arc::clone(&logger);
     let broadcast_handle = tokio::spawn(async move {
+        logger_broadcast.info(&format!("广播任务启动 (客户端: {})", client_socket_id_3));
         info!("客户端 {} 的广播任务启动", client_socket_id_3);
 
         while let Some(data) = scrcpy_data_rx.recv().await {
@@ -614,10 +669,12 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
             let base64_data = BASE64_STANDARD.encode(&data);
 
             if let Err(e) = io.emit("scrcpy", &base64_data).await {
+                logger_broadcast.error(&format!("广播 scrcpy 数据失败: {:?}", e));
                 error!("广播 scrcpy 数据失败: {:?}", e);
             }
         }
 
+        logger_broadcast.info(&format!("广播任务结束，共广播 (客户端: {})", client_socket_id_3));
         info!("客户端 {} 的广播任务结束", client_socket_id_3);
     });
 

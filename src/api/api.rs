@@ -1,4 +1,5 @@
-use std::{net::TcpListener, sync::Arc};
+use std::sync::Arc;
+use std::net::TcpListener;
 use axum::{
     extract::{State, Path},
     http::StatusCode,
@@ -145,33 +146,25 @@ impl ApiServer {
 
         let mut scrcpy: std::sync::RwLockWriteGuard<'_, crate::context::context::ScrcpyServer> = ctx.get_scrcpy().write().unwrap();
         let mut adb = ctx.get_adb_server().write().unwrap();
+        let device = adb.get_device_by_name(&req.serial).unwrap();
 
-        let jar_file = scrcpy.get_server_jar();
-        let mut device = adb.get_device_by_name(&req.serial).unwrap();
-
-        // 动态分配可用端口
+         // 动态分配可用端口
         let listener = TcpListener::bind("127.0.0.1:0")
             .expect("Failed to bind to an available port");
-        let port = listener.local_addr()
+        let scrcpy_server_port = listener.local_addr()
             .expect("Failed to get local address")
             .port();
         drop(listener);
-
-        info!("reverse port: {}", port);
-        let _ = device.forward_remove_all();
-        device.forward(String::from("localabstract:scrcpy"), format!("tcp:{}", port)).unwrap();
-
-        let push_status = device.push(jar_file, "/data/local/tmp/scrcpy-server.jar");
-        match push_status {
-            Ok(_) => info!("设备 {} 推送文件成功", req.serial),
-            Err(e) => warn!("设备 {} 推送文件失败: {:?}", req.serial, e),
-        }
-
-        let connect: ScrcpyConnect = ScrcpyConnect::new(port);
+        // 创建 ScrcpyConnect（会自动分配 socket.io 端口）
+        let connect = Arc::new(ScrcpyConnect::new(scrcpy_server_port));
         let socket_io_port = connect.get_port();
-        let socket_io_port_1 = connect.get_port();
+
+        info!("设备 {} Socket.IO 端口: {}", req.serial, socket_io_port);
+
+        // 启动 scrcpy 连接（scrcpy_server_port 会在 run 内部自动分配）
+        let connect_clone = Arc::clone(&connect);
         tokio::spawn(async move {
-            ScrcpyConnect::run(Arc::new(ScrcpyConnect::default(socket_io_port_1, port)), Arc::new(device)).await;
+            connect_clone.run(Arc::new(device)).await;
         });
 
         // 添加设备到管理列表
