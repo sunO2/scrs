@@ -303,6 +303,45 @@
             box-shadow: 0 0 15px rgba(255, 0, 0, 0.5);
         }
 
+        /* Status dots */
+        .status-indicators {
+            display: flex;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: 2px solid #666;
+            background: #1a1a1a;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s;
+            cursor: help;
+        }
+
+        .status-dot.connected {
+            background: #00ff41;
+            border-color: #00ff41;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.8);
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.disconnected {
+            background: #330000;
+            border-color: #ff0000;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+            }
+            50% {
+                box-shadow: 0 0 20px rgba(0, 255, 65, 1);
+            }
+        }
+
         /* Middle Panel - Log Area */
         .panel-middle {
             width: 50%;
@@ -685,31 +724,23 @@
                     </select>
                     <button id="refreshDevicesBtn" class="icon-button" title="刷新设备列表">↻</button>
                 </div>
-                <button id="connectDeviceBtn">连接设备</button>
             </div>
 
-            <!-- Step 2: Connect Socket.IO -->
+            <!-- Connection Info -->
             <div class="section">
-                <h3>2. 连接 Socket.IO</h3>
-                <label>Socket.IO 地址:</label>
-                <div class="input-group">
-                    <input type="text" id="socketIp" value="127.0.0.1" placeholder="IP">
-                    <input type="number" id="socketPort" placeholder="端口" readonly>
-                </div>
-                <button id="connectSocketBtn">连接 Socket.IO</button>
-                <button id="disconnectSocketBtn" class="disconnect hidden">断开连接</button>
-            </div>
-
-            <!-- Connection Status -->
-            <div class="status-section">
+                <h3>2. 连接信息</h3>
                 <div class="status-item">
-                    <span class="label">设备状态:</span>
-                    <span id="deviceStatus" class="status-badge disconnected">未连接</span>
+                    <span class="label">端口:</span>
+                    <span id="socketPortDisplay" class="status-badge">--</span>
                 </div>
                 <div class="status-item">
-                    <span class="label">Socket.IO:</span>
-                    <span id="socketStatus" class="status-badge disconnected">未连接</span>
+                    <span class="label">状态:</span>
+                    <span class="status-indicators">
+                        <span id="deviceStatusDot" class="status-dot disconnected" title="设备状态"></span>
+                        <span id="socketStatusDot" class="status-dot disconnected" title="Socket.IO 状态"></span>
+                    </span>
                 </div>
+                <button id="connectDeviceBtn">连接设备</button>
             </div>
         </div>
 
@@ -749,9 +780,6 @@
     </div>
 
     <div id="errorMessage"></div>
-
-    <!-- Hidden input for backward compatibility -->
-    <input type="hidden" id="socketUrl" value="">
 
     <script src="socketio-client.js"></script>
 </body>

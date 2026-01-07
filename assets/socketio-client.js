@@ -63,7 +63,7 @@ async function fetchDevices() {
     }
 }
 
-// 连接到设备
+// 连接到设备并自动连接 Socket.IO
 async function connectToDevice() {
     const deviceSerial = document.getElementById('deviceSelect').value;
     if (!deviceSerial) {
@@ -82,36 +82,114 @@ async function connectToDevice() {
         if (!response.ok) throw new Error('连接设备失败');
 
         const data = await response.json();
-        log(`设备连接成功, Socket.IO 端口: ${data.data.socketio_port}`, 'success');
+        const port = data.data.socketio_port;
+        log(`设备连接成功, Socket.IO 端口: ${port}`, 'success');
 
-        // 更新 socket 端口字段
-        document.getElementById('socketPort').value = data.data.socketio_port;
-        document.getElementById('deviceStatus').textContent = '已连接';
-        document.getElementById('deviceStatus').classList.remove('disconnected');
-        document.getElementById('deviceStatus').classList.add('connected');
+        // 更新端口显示
+        document.getElementById('socketPortDisplay').textContent = port;
 
-        return data.socketio_port;
+        // 更新设备状态点
+        document.getElementById('deviceStatusDot').classList.remove('disconnected');
+        document.getElementById('deviceStatusDot').classList.add('connected');
+
+        // 自动连接 Socket.IO
+        await connectToSocketIO(port);
+
     } catch (error) {
         log(`连接设备失败: ${error.message}`, 'error');
     }
 }
 
 // 连接到 Socket.IO
-async function connectSocket() {
-    const ip = document.getElementById('socketIp').value;
-    const port = document.getElementById('socketPort').value;
+async function connectToSocketIO(port) {
+    const ip = '127.0.0.1';
+    const url = `http://${ip}:${port}`;
 
-    if (!port) {
-        log('请先连接设备获取 Socket.IO 端口', 'warn');
-        return;
+    log(`正在连接 Socket.IO: ${url}`, 'info');
+
+    // 清理旧连接
+    if (socket) {
+        socket.disconnect();
+        socket = null;
     }
 
-    const url = `http://${ip}:${port}`;
-    log(`连接到 Socket.IO: ${url}`, 'info');
+    if (decoder) {
+        decoder.destroy();
+        decoder = null;
+    }
 
-    // 复用现有的 connect() 函数
-    document.getElementById('socketUrl').value = url;
-    connect();
+    // 创建新连接
+    socket = io(url, {
+        path: '/socket.io/',
+        transports: ['websocket', 'polling']
+    });
+
+    socket.on('connect', () => {
+        log('Socket.IO 连接成功', 'success');
+        // 更新 Socket.IO 状态点
+        document.getElementById('socketStatusDot').classList.remove('disconnected');
+        document.getElementById('socketStatusDot').classList.add('connected');
+
+        // 发送测试消息
+        socket.emit('test', { message: 'Hello from web client' });
+    });
+
+    socket.on('test_response', (data) => {
+        log(`收到测试响应: ${JSON.stringify(data)}`, 'info');
+    });
+
+    // 处理设备元数据
+    socket.on('scrcpy_device_meta', (deviceName) => {
+        log(`收到设备元数据: ${deviceName}`, 'success');
+
+        // 重置解码器以处理新的解码数据
+        if (decoder) {
+            // 销毁旧解码器
+            decoder.destroy();
+
+            // 创建新解码器
+            decoder = new H264Decoder();
+            decoder.init((frameData) => {
+                drawFrame(frameData);
+            });
+
+            log('解码器已重置，准备接收新的解码数据', 'info');
+        }
+    });
+
+    socket.on('scrcpy', (base64Data) => {
+        // 接收到 scrcpy 视频数据 (base64 编码)
+        handleVideoData(base64Data);
+    });
+
+    socket.on('scrcpy_ctl_ack', (data) => {
+        // log(`✓ 服务器确认收到事件`, 'info');
+    });
+
+    socket.on('scrcpy_ctl_error', (data) => {
+        log(`❌ 触摸事件发送失败: ${data.error}`, 'error');
+    });
+
+    socket.on('connect_error', (err) => {
+        log(`连接失败: ${err.message}`, 'error');
+        // 更新 Socket.IO 状态点
+        document.getElementById('socketStatusDot').classList.remove('connected');
+        document.getElementById('socketStatusDot').classList.add('disconnected');
+    });
+
+    socket.on('disconnect', (reason) => {
+        log(`断开连接: ${reason}`, 'warn');
+        // 更新 Socket.IO 状态点
+        document.getElementById('socketStatusDot').classList.remove('connected');
+        document.getElementById('socketStatusDot').classList.add('disconnected');
+    });
+
+    // 初始化解码器
+    decoder = new H264Decoder();
+    decoder.init((frameData) => {
+        // 解码后的帧数据回调
+        drawFrame(frameData);
+    });
 }
 
 // 断开 Socket.IO 连接
@@ -126,38 +204,20 @@ function disconnectSocket() {
         decoder = null;
     }
 
-    updateSocketStatus(false);
+    // 更新状态点
+    document.getElementById('socketStatusDot').classList.remove('connected');
+    document.getElementById('socketStatusDot').classList.add('disconnected');
+    document.getElementById('deviceStatusDot').classList.remove('connected');
+    document.getElementById('deviceStatusDot').classList.add('disconnected');
 
     // 清空画布
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    log('已断开 Socket.IO 连接', 'info');
-}
+    // 清空端口显示
+    document.getElementById('socketPortDisplay').textContent = '--';
 
-// 更新 Socket.IO 状态
-function updateSocketStatus(connected) {
-    const socketStatus = document.getElementById('socketStatus');
-    const connectBtn = document.getElementById('connectSocketBtn');
-    const disconnectBtn = document.getElementById('disconnectSocketBtn');
-    const loadingHint = document.getElementById('loadingHint');
-
-    if (connected) {
-        socketStatus.textContent = '已连接';
-        socketStatus.classList.remove('disconnected');
-        socketStatus.classList.add('connected');
-        connectBtn.classList.add('hidden');
-        disconnectBtn.classList.remove('hidden');
-        loadingHint.style.display = 'none';
-        log('Socket.IO 已连接', 'success');
-    } else {
-        socketStatus.textContent = '未连接';
-        socketStatus.classList.remove('connected');
-        socketStatus.classList.add('disconnected');
-        connectBtn.classList.remove('hidden');
-        disconnectBtn.classList.add('hidden');
-        loadingHint.style.display = 'block';
-    }
+    log('已断开连接', 'info');
 }
 
 // ========== 原有的 Socket.IO 客户端代码 ==========
@@ -175,9 +235,22 @@ let frameCount = 0;
 let lastFrameTime = Date.now();
 let fps = 0;
 
-// Scrcpy 控制消息类型
-const SCRCPY_MSG_TYPE_INJECT_TOUCH_EVENT = 2;
-const SCRCPY_MSG_TYPE_SET_DISPLAY_POWER = 10;
+// Scrcpy 控制消息类型 (根据 scrcpy control_msg.h)
+const SCRCPY_MSG_TYPE_INJECT_KEYCODE = 0;   // 按键代码事件
+const SCRCPY_MSG_TYPE_INJECT_TEXT = 1;      // 文本输入事件
+const SCRCPY_MSG_TYPE_INJECT_TOUCH_EVENT = 2;  // 触摸事件
+const SCRCPY_MSG_TYPE_SET_DISPLAY_POWER = 9;  // 设置电源 (根据枚举位置)
+
+// Android 按键动作
+const KEY_ACTION_DOWN = 0;
+const KEY_ACTION_UP = 1;
+
+// Android 按键代码 (KEYCODE_*)
+const KEYCODE_DEL = 0x0043;      // Backspace (KEYCODE_DEL = 67)
+const KEYCODE_FORWARD_DEL = 0x0070;  // Delete (向前删除, KEYCODE_FORWARD_DEL = 112)
+const KEYCODE_ENTER = 0x0042;    // Enter (KEYCODE_ENTER = 66)
+const KEYCODE_TAB = 0x003d;      // Tab (KEYCODE_TAB = 61)
+const KEYCODE_ESCAPE = 0x006f;   // Escape (KEYCODE_ESCAPE = 111)
 
 // Android MotionEvent 动作类型
 const ACTION_DOWN = 0;
@@ -861,6 +934,74 @@ function buildTouchEvent(action, pointerId, x, y, pressure = 1.0, actionButton =
 }
 
 /**
+ * 构建文本输入消息
+ * @param {string} text - 要输入的文本内容
+ */
+function buildTextEvent(text) {
+    // 将文本编码为 UTF-8 字节数组
+    const textEncoder = new TextEncoder();
+    const textBytes = textEncoder.encode(text);
+    const textLength = textBytes.length;
+
+    // 计算消息总长度: type(1) + length(4) + text(N)
+    const totalLength = 1 + 4 + textLength;
+    const buffer = new ArrayBuffer(totalLength);
+    const view = new DataView(buffer);
+
+    let offset = 0;
+
+    // 1. 类型: 1 byte (TYPE_INJECT_TEXT = 1)
+    view.setUint8(offset, SCRCPY_MSG_TYPE_INJECT_TEXT);
+    offset += 1;
+
+    // 2. 文本长度: 4 bytes (big-endian)
+    view.setUint32(offset, textLength, false);
+    offset += 4;
+
+    // 3. 文本内容 (UTF-8 编码)
+    const uint8Array = new Uint8Array(buffer);
+    uint8Array.set(textBytes, offset);
+
+    return uint8Array;
+}
+
+/**
+ * 构建按键事件消息
+ * @param {number} action - 按键动作 (KEY_ACTION_DOWN=0, KEY_ACTION_UP=1)
+ * @param {number} keyCode - Android 按键代码 (KEYCODE_*)
+ */
+function buildKeyEvent(action, keyCode) {
+    // 根据 scrcpy 源码 (control_msg.h)，inject_keycode 结构:
+    // type(1) + action(1) + keycode(4) + repeat(4) + metastate(4) = 14 bytes
+    const totalLength = 1 + 1 + 4 + 4 + 4;
+    const buffer = new ArrayBuffer(totalLength);
+    const view = new DataView(buffer);
+
+    let offset = 0;
+
+    // 1. 类型: 1 byte (TYPE_INJECT_KEYCODE = 0, 实际是 SC_CONTROL_MSG_TYPE_INJECT_KEYCODE)
+    view.setUint8(offset, SCRCPY_MSG_TYPE_INJECT_KEYCODE);
+    offset += 1;
+
+    // 2. 动作: 1 byte (0=DOWN, 1=UP)
+    view.setUint8(offset, action);
+    offset += 1;
+
+    // 3. 按键代码: 4 bytes (big-endian)
+    view.setUint32(offset, keyCode, false);
+    offset += 4;
+
+    // 4. 重复次数: 4 bytes (通常为 0, big-endian)
+    view.setUint32(offset, 0, false);
+    offset += 4;
+
+    // 5. 元状态: 4 bytes (修饰键状态, 0=无修饰键, big-endian)
+    view.setUint32(offset, 0, false);
+
+    return new Uint8Array(buffer);
+}
+
+/**
  * 将 canvas 坐标转换为设备坐标
  */
 function canvasToDeviceCoords(canvasX, canvasY) {
@@ -970,6 +1111,68 @@ function sendTouchEvent(action, x, y) {
 }
 
 /**
+ * 发送文本输入事件
+ * @param {string} text - 要输入的文本内容
+ */
+function sendTextEvent(text) {
+    if (!socket || !socket.connected) {
+        log('Socket.IO 未连接，无法发送文本', 'warn');
+        return;
+    }
+
+    if (!text || text.length === 0) {
+        return;
+    }
+
+    const message = buildTextEvent(text);
+
+    // 调试：输出实际发送的数据
+    const hexPreview = Array.from(message)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join(' ');
+    console.log(`发送文本事件: "${text}" (${text.length} 字符)`);
+    console.log(`完整数据hex: ${hexPreview}`);
+
+    // 详细调试：显示每个字符的 Unicode 码点
+    const codePoints = Array.from(text).map(c => `U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`).join(' ');
+    console.log(`Unicode 码点: ${codePoints}`);
+
+    // 发送二进制数据
+    socket.emit('scrcpy_ctl', message, (ack) => {
+        if (ack) {
+            console.log('文本事件已发送');
+        }
+    });
+}
+
+/**
+ * 发送按键事件
+ * @param {number} keyCode - Android 按键代码 (KEYCODE_*)
+ */
+function sendKeyEvent(keyCode) {
+    if (!socket || !socket.connected) {
+        log('Socket.IO 未连接，无法发送按键事件', 'warn');
+        return;
+    }
+
+    // 发送按下事件
+    const downMessage = buildKeyEvent(KEY_ACTION_DOWN, keyCode);
+    const downHex = Array.from(downMessage).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    console.log(`按下事件: ${downHex}`);
+    socket.emit('scrcpy_ctl', downMessage);
+
+    // 短暂延迟后发送抬起事件
+    setTimeout(() => {
+        const upMessage = buildKeyEvent(KEY_ACTION_UP, keyCode);
+        const upHex = Array.from(upMessage).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        console.log(`抬起事件: ${upHex}`);
+        socket.emit('scrcpy_ctl', upMessage);
+    }, 50);
+
+    console.log(`发送按键事件: KEYCODE=0x${keyCode.toString(16).toUpperCase().padStart(4, '0')} (${keyCode})`);
+}
+
+/**
  * 获取动作名称
  */
 function getActionName(action) {
@@ -1025,150 +1228,11 @@ function showError(message) {
 }
 
 /**
- * 更新连接状态
- */
-function updateStatus(connected) {
-    const indicator = document.querySelector('.status-indicator');
-    const statusText = document.getElementById('statusText');
-    const connectBtn = document.getElementById('connectBtn');
-    const disconnectBtn = document.getElementById('disconnectBtn');
-    const loadingHint = document.getElementById('loadingHint');
-
-    if (connected) {
-        indicator.classList.remove('disconnected');
-        indicator.classList.add('connected');
-        statusText.textContent = '已连接';
-        connectBtn.style.display = 'none';
-        disconnectBtn.style.display = 'inline-block';
-        loadingHint.style.display = 'none';
-    } else {
-        indicator.classList.remove('connected');
-        indicator.classList.add('disconnected');
-        statusText.textContent = '未连接';
-        connectBtn.style.display = 'inline-block';
-        disconnectBtn.style.display = 'none';
-        loadingHint.style.display = 'block';
-    }
-}
-
-/**
  * 更新统计信息
  */
 function updateStats() {
     // const stats = document.getElementById('stats');
     // stats.textContent = `FPS: ${fps} | 帧数: ${frameCount} | 尺寸: ${canvas.width}x${canvas.height}`;
-}
-
-/**
- * 连接到 Socket.IO 服务器
- */
-function connect() {
-    const url = document.getElementById('socketUrl').value;
-
-    if (!url) {
-        log('请输入 Socket.IO URL', 'warn');
-        return;
-    }
-
-    // 清理旧连接
-    if (socket) {
-        socket.disconnect();
-    }
-
-    if (decoder) {
-        decoder.destroy();
-        decoder = null;
-    }
-
-    log(`正在连接到 Socket.IO: ${url}`, 'info');
-
-    // 创建新连接
-    socket = io(url, {
-        path: '/socket.io/',
-        transports: ['websocket', 'polling']
-    });
-
-    socket.on('connect', () => {
-        log('Socket.IO 连接成功', 'success');
-        updateSocketStatus(true);
-
-        // 发送测试消息
-        socket.emit('test', { message: 'Hello from web client' });
-    });
-
-    socket.on('test_response', (data) => {
-        log(`收到测试响应: ${JSON.stringify(data)}`, 'info');
-    });
-
-    // 处理设备元数据
-    socket.on('scrcpy_device_meta', (deviceName) => {
-        log(`收到设备元数据: ${deviceName}`, 'success');
-
-        // 重置解码器以处理新的解码数据
-        if (decoder) {
-            // 销毁旧解码器
-            decoder.destroy();
-
-            // 创建新解码器
-            decoder = new H264Decoder();
-            decoder.init((frameData) => {
-                drawFrame(frameData);
-            });
-
-            log('解码器已重置，准备接收新的解码数据', 'info');
-        }
-    });
-
-    socket.on('scrcpy', (base64Data) => {
-        // 接收到 scrcpy 视频数据 (base64 编码)
-        handleVideoData(base64Data);
-    });
-
-    socket.on('scrcpy_ctl_ack', (data) => {
-        // log(`✓ 服务器确认收到事件`, 'info');
-    });
-
-    socket.on('scrcpy_ctl_error', (data) => {
-        log(`❌ 触摸事件发送失败: ${data.error}`, 'error');
-    });
-
-    socket.on('connect_error', (err) => {
-        log(`连接失败: ${err.message}`, 'error');
-        updateSocketStatus(false);
-    });
-
-    socket.on('disconnect', (reason) => {
-        log(`断开连接: ${reason}`, 'warn');
-        updateSocketStatus(false);
-    });
-
-    // 初始化解码器
-    decoder = new H264Decoder();
-    decoder.init((frameData) => {
-        // 解码后的帧数据回调
-        drawFrame(frameData);
-    });
-}
-
-/**
- * 断开连接
- */
-function disconnect() {
-    if (socket) {
-        socket.disconnect();
-        socket = null;
-    }
-
-    if (decoder) {
-        decoder.destroy();
-        decoder = null;
-    }
-
-    updateStatus(false);
-
-    // 清空画布
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
 /**
@@ -1439,6 +1503,78 @@ canvas.addEventListener('touchend', (e) => {
     sendTouchEvent(ACTION_UP, deviceCoords.x, deviceCoords.y);
 });
 
+// ========== Canvas 键盘事件处理 ==========
+
+// 为 canvas 添加 tabindex 属性，使其可以接收键盘事件
+canvas.setAttribute('tabindex', '0');
+
+// 当鼠标悬停在 canvas 上时，键盘输入将发送到设备
+canvas.addEventListener('keydown', (e) => {
+    e.preventDefault();
+
+    // 按键代码映射 - 需要使用 Android KEYCODE 的按键
+    const keyCodeMap = {
+        'Backspace': KEYCODE_DEL,           // 0x000e
+        'Delete': KEYCODE_FORWARD_DEL,      // 0x0070
+        'Enter': KEYCODE_ENTER,             // 0x0042
+        'Tab': KEYCODE_TAB,                 // 0x003d
+        'Escape': KEYCODE_ESCAPE            // 0x006f
+    };
+
+    // 处理特殊按键 - 使用 Android KEYCODE 事件
+    if (keyCodeMap[e.key]) {
+        const keyCode = keyCodeMap[e.key];
+        sendKeyEvent(keyCode);
+        console.log(`按键事件: ${e.key} -> KEYCODE 0x${keyCode.toString(16).toUpperCase().padStart(4, '0')}`);
+        return;
+    }
+
+    // 无法识别的按键
+    if (e.key === 'Unidentified') {
+        console.warn('未识别的按键事件');
+        return;
+    }
+
+    // 组合键（Ctrl+C, Ctrl+V 等），暂不处理
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+        console.log(`组合键被忽略: Ctrl=${e.ctrlKey}, Alt=${e.altKey}, Meta=${e.metaKey}`);
+        return;
+    }
+
+    // 功能键 F1-F12 等，暂不处理
+    if (e.key.startsWith('F') && e.key.length > 1) {
+        console.log(`功能键被忽略: ${e.key}`);
+        return;
+    }
+
+    // 普通字符（单个字符，包括中文等）- 使用文本注入
+    if (e.key.length === 1) {
+        sendTextEvent(e.key);
+        console.log(`文本输入: "${e.key}"`);
+    }
+});
+
+// canvas 获得焦点时添加视觉反馈
+canvas.addEventListener('focus', () => {
+    canvas.style.outline = '2px solid #4caf50';
+    log('Canvas 已聚焦，键盘输入将发送到设备', 'info');
+});
+
+canvas.addEventListener('blur', () => {
+    canvas.style.outline = 'none';
+    log('Canvas 失去焦点', 'info');
+});
+
+// 鼠标悬停在 canvas 上时，自动聚焦
+canvas.addEventListener('mouseenter', () => {
+    canvas.focus();
+});
+
+// 鼠标离开 canvas 时，失去焦点
+canvas.addEventListener('mouseleave', () => {
+    canvas.blur();
+});
+
 // ========== 按钮事件 ==========
 
 // 屏幕电源状态 (true = 亮屏, false = 息屏)
@@ -1465,10 +1601,6 @@ document.getElementById('powerToggleBtn').addEventListener('click', () => {
 // 设备管理事件
 document.getElementById('refreshDevicesBtn').addEventListener('click', fetchDevices);
 document.getElementById('connectDeviceBtn').addEventListener('click', connectToDevice);
-
-// Socket.IO 连接事件
-document.getElementById('connectSocketBtn').addEventListener('click', connectSocket);
-document.getElementById('disconnectSocketBtn').addEventListener('click', disconnectSocket);
 
 // 日志控制事件
 document.getElementById('clearLogBtn').addEventListener('click', () => {
