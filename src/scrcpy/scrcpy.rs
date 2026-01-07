@@ -382,6 +382,12 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
     let client_socket_id_jar = client_socket_id.clone();
     let scrcpy_jar_handle = tokio::spawn(async move {
         let device_serial = device_identifier.unwrap();
+
+        // 创建 logs 目录（如果不存在）
+        if let Err(e) = std::fs::create_dir_all("logs") {
+            error!("创建 logs 目录失败: {:?}", e);
+        }
+
         let log_path = format!("logs/ws_{}.log", device_serial);
         let mut log_file = std::fs::OpenOptions::new()
             .create(true)
@@ -621,9 +627,11 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
     session.socket_read_handle = Some(socket_read_handle);
     session.socket_write_handle = Some(socket_write_handle);
     session.broadcast_handle = Some(broadcast_handle);
-    // 客户端已在 handle_client_connect 中添加到集合
-    // 只需验证客户端在集合中（用于调试）
-    assert!(session.connected_clients.contains(&client_socket_id));
+
+    // 检查客户端是否仍在集合中（可能已断开连接）
+    if !session.connected_clients.contains(&client_socket_id) {
+        warn!("客户端 {} 在会话启动前已断开连接，但会话将继续为其他客户端服务", client_socket_id);
+    }
 
     info!("Scrcpy 会话已启动，服务于 {} 个客户端", session.connected_clients.len());
 }

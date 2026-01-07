@@ -1,9 +1,8 @@
-use std::{sync::Arc, net::TcpListener};
-use adb_client::ADBDeviceExt;
+use std::{net::TcpListener, sync::Arc};
 use axum::{
-    extract::State,
+    extract::{State, Path},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
     body::Body,
@@ -49,10 +48,10 @@ pub struct ApiResponse<T> {
     pub data: Option<T>,
 }
 
-/// 静态文件资源
+/// Web 根目录文件资源
 #[derive(RustEmbed)]
-#[folder = "assets/"]
-struct Assets;
+#[folder = "assets/root/"]
+struct RootAssets;
 
 pub struct ApiServer {
     pub app: Router,
@@ -66,8 +65,7 @@ impl ApiServer {
             .route("/disconnect", post(Self::disconnect_device))
             .route("/device/{serial}/status", get(Self::get_device_status))
             .route("/hello", get(Self::hello))
-            .route("/web/index.html", get(Self::index_html))
-            .route("/web/socketio-client.js", get(Self::socketio_client_js))
+            .route("/web/{*path}", get(Self::serve_web_file))
             .with_state(ctx);
         ApiServer { app }
     }
@@ -268,18 +266,98 @@ impl ApiServer {
         "你好，欢迎使用 Axum Scrcpy API！".to_string()
     }
 
-    /// 主页 HTML
-    async fn index_html() -> impl IntoResponse {
-        let html = Assets::get("index.html").unwrap();
-        Html(html.data.to_vec())
+    /// 服务 Web 静态文件
+    /// 支持 /web/* 路径访问 assets/root/ 下的所有文件
+    async fn serve_web_file(Path(path): Path<String>) -> impl IntoResponse {
+        // 处理根路径请求
+        let file_path = if path.is_empty() || path == "/" {
+            "index.html"
+        } else {
+            // 移除前导斜杠
+            path.trim_start_matches('/')
+        };
+
+        // 根据文件扩展名获取 MIME 类型
+        let mime_type = Self::get_mime_type(file_path);
+
+        // 从嵌入的文件中获取
+        match RootAssets::get(file_path) {
+            Some(content) => {
+                Response::builder()
+                    .header("Content-Type", mime_type)
+                    .body(Body::from(content.data.to_vec()))
+                    .unwrap()
+            }
+            None => {
+                // 如果请求的是目录，尝试添加 index.html
+                if !file_path.contains('.') {
+                    match RootAssets::get(&format!("{}/index.html", file_path)) {
+                        Some(content) => {
+                            Response::builder()
+                                .header("Content-Type", "text/html")
+                                .body(Body::from(content.data.to_vec()))
+                                .unwrap()
+                        }
+                        None => {
+                            Response::builder()
+                                .status(StatusCode::NOT_FOUND)
+                                .body(Body::from("文件未找到"))
+                                .unwrap()
+                        }
+                    }
+                } else {
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Body::from("文件未找到"))
+                        .unwrap()
+                }
+            }
+        }
     }
 
-    /// Socket.IO 客户端 JS
-    async fn socketio_client_js() -> impl IntoResponse {
-        let js = Assets::get("socketio-client.js").unwrap();
-        Response::builder()
-            .header("Content-Type", "application/javascript")
-            .body(Body::from(js.data.to_vec()))
-            .unwrap()
+    /// 根据文件扩展名获取 MIME 类型
+    fn get_mime_type(path: &str) -> &'static str {
+        let path_lower = path.to_lowercase();
+        if path_lower.ends_with(".html") || path_lower.ends_with(".htm") {
+            "text/html"
+        } else if path_lower.ends_with(".css") {
+            "text/css"
+        } else if path_lower.ends_with(".js") {
+            "application/javascript"
+        } else if path_lower.ends_with(".json") {
+            "application/json"
+        } else if path_lower.ends_with(".png") {
+            "image/png"
+        } else if path_lower.ends_with(".jpg") || path_lower.ends_with(".jpeg") {
+            "image/jpeg"
+        } else if path_lower.ends_with(".gif") {
+            "image/gif"
+        } else if path_lower.ends_with(".svg") {
+            "image/svg+xml"
+        } else if path_lower.ends_with(".ico") {
+            "image/x-icon"
+        } else if path_lower.ends_with(".woff") {
+            "font/woff"
+        } else if path_lower.ends_with(".woff2") {
+            "font/woff2"
+        } else if path_lower.ends_with(".ttf") {
+            "font/ttf"
+        } else if path_lower.ends_with(".eot") {
+            "application/vnd.ms-fontobject"
+        } else if path_lower.ends_with(".mp4") {
+            "video/mp4"
+        } else if path_lower.ends_with(".webm") {
+            "video/webm"
+        } else if path_lower.ends_with(".mp3") {
+            "audio/mpeg"
+        } else if path_lower.ends_with(".wav") {
+            "audio/wav"
+        } else if path_lower.ends_with(".pdf") {
+            "application/pdf"
+        } else if path_lower.ends_with(".zip") {
+            "application/zip"
+        } else {
+            "application/octet-stream"
+        }
     }
 }

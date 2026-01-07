@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scrcpy Web Viewer - SDK Demo</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', 'Consolas', 'Monaco', 'Lucida Console', monospace;
+            background: #000000;
+            color: #00ff41;
+            overflow: hidden;
+            text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
+            position: relative;
+        }
+
+        /* CRT Scanline Effect */
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15),
+                rgba(0, 0, 0, 0.15) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        .main-container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* Left Panel - Device Connection & Log */
+        .panel-left {
+            width: 25%;
+            min-width: 250px;
+            padding: 20px;
+            background: #0a0a0a;
+            border-right: 2px solid #00ff41;
+            overflow-y: auto;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .panel-left h2 {
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 20px;
+            color: #00ff41;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 2px solid #00ff41;
+            padding-bottom: 10px;
+            text-shadow: 0 0 10px #00ff41;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-left h2 .status-indicators {
+            display: flex;
+            gap: 8px;
+        }
+
+        .section {
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #0f0f0f;
+            border: 1px solid #00ff41;
+            border-radius: 0;
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+        }
+
+        .section label {
+            display: block;
+            font-size: 12px;
+            color: #00cc33;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            background: #1a1a1a;
+            border: 2px solid #00ff41;
+            color: #00ff41;
+            padding: 10px 12px;
+            border-radius: 0;
+            font-size: 14px;
+            box-sizing: border-box;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 5px rgba(0, 255, 65, 0.5);
+            transition: all 0.3s;
+            box-shadow: inset 0 0 10px rgba(0, 255, 65, 0.1);
+        }
+
+        select {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .input-group select {
+            margin-bottom: 0;
+            flex: 1;
+            min-width: 0;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #00ff00;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.5), inset 0 0 10px rgba(0, 255, 65, 0.2);
+        }
+
+        button {
+            background: #003300;
+            color: #00ff41;
+            border: 2px solid #00ff41;
+            padding: 10px 16px;
+            border-radius: 0;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            width: 100%;
+            margin-bottom: 8px;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 0 0 5px rgba(0, 255, 65, 0.8);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+        }
+
+        button:hover {
+            background: #00ff41;
+            color: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.8);
+            text-shadow: none;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        button:disabled {
+            background: #1a1a1a;
+            color: #333;
+            border-color: #333;
+            cursor: not-allowed;
+            box-shadow: none;
+            text-shadow: none;
+        }
+
+        button.disconnect {
+            background: #330000;
+            border-color: #ff0000;
+            color: #ff0000;
+            text-shadow: 0 0 5px rgba(255, 0, 0, 0.8);
+        }
+
+        button.disconnect:hover {
+            background: #ff0000;
+            color: #000;
+            box-shadow: 0 0 20px rgba(255, 0, 0, 0.8);
+        }
+
+        button.secondary {
+            background: #1a1a1a;
+            border-color: #666;
+            color: #999;
+            text-shadow: none;
+        }
+
+        button.secondary:hover {
+            background: #333;
+            color: #fff;
+            border-color: #999;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.3);
+        }
+
+        button.icon-button {
+            width: auto;
+            padding: 10px 12px;
+            margin-bottom: 0;
+            font-size: 18px;
+            min-width: 50px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid #666;
+            background: #1a1a1a;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s;
+            cursor: help;
+        }
+
+        .status-dot.connected {
+            background: #00ff41;
+            border-color: #00ff41;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.8);
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.disconnected {
+            background: #330000;
+            border-color: #ff0000;
+            box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+            }
+            50% {
+                box-shadow: 0 0 20px rgba(0, 255, 65, 1);
+            }
+        }
+
+        .log-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .log-controls {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            z-index: 10;
+            padding: 4px 6px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #00ff41;
+            border-radius: 0;
+            backdrop-filter: blur(4px);
+        }
+
+        .log-controls button {
+            width: auto;
+            margin-bottom: 0;
+            padding: 4px 8px;
+            font-size: 10px;
+            min-width: auto;
+        }
+
+        .log-controls label {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 9px;
+            color: #00cc33;
+            cursor: pointer;
+            margin-bottom: 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .log-controls input[type="checkbox"] {
+            cursor: pointer;
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            border: 1px solid #00ff41;
+            background: #1a1a1a;
+            position: relative;
+        }
+
+        .log-controls input[type="checkbox"]:checked {
+            background: #00ff41;
+        }
+
+        .log-controls input[type="checkbox"]:checked::after {
+            content: "✓";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #000;
+            font-size: 9px;
+            font-weight: bold;
+        }
+
+        .log-container {
+            flex: 1;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            background: #000;
+            padding: 30px 8px 8px 8px;
+            border: 1px solid #00ff41;
+            border-radius: 0;
+            position: relative;
+            box-shadow: inset 0 0 20px rgba(0, 255, 65, 0.1);
+            min-height: 0;
+        }
+
+        .log-container::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .log-container::-webkit-scrollbar-track {
+            background: #000;
+            border-left: 1px solid #00ff41;
+        }
+
+        .log-container::-webkit-scrollbar-thumb {
+            background: #00ff41;
+            border: 1px solid #00ff41;
+        }
+
+        .log-entry {
+            padding: 4px 6px;
+            margin: 2px 0;
+            border-left: 2px solid #00ff41;
+            word-wrap: break-word;
+            background: rgba(0, 255, 65, 0.02);
+            transition: all 0.3s;
+            color: #00ff41;
+            font-size: 11px;
+        }
+
+        .log-entry:hover {
+            background: rgba(0, 255, 65, 0.05);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+        }
+
+        .log-entry.info {
+            border-left-color: #2196f3;
+            color: #2196f3;
+        }
+
+        .log-entry.warn {
+            border-left-color: #ffaa00;
+            color: #ffaa00;
+            background: rgba(255, 170, 0, 0.02);
+        }
+
+        .log-entry.error {
+            border-left-color: #ff0000;
+            color: #ff0000;
+            background: rgba(255, 0, 0, 0.02);
+        }
+
+        .log-entry.success {
+            border-left-color: #00ff41;
+            color: #00ff41;
+            background: rgba(0, 255, 65, 0.05);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+        }
+
+        .log-timestamp {
+            color: #00cc33;
+            margin-right: 6px;
+            font-weight: bold;
+            font-size: 10px;
+        }
+
+        /* Right Panel - Video Display */
+        .panel-right {
+            flex: 1;
+            min-width: 400px;
+            padding: 20px;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .panel-right h2 {
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 15px;
+            color: #00ff41;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 2px solid #00ff41;
+            padding-bottom: 10px;
+            text-shadow: 0 0 10px #00ff41;
+        }
+
+        .video-container {
+            flex: 1;
+            display: flex;
+            gap: 30px;
+            justify-content: flex-start;
+            align-items: flex-start;
+            width: 100%;
+            padding-top: 20px;
+            padding-left: 10px;
+        }
+
+        .video-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 8px;
+            background: #0a0a0a;
+            border: 2px solid #00ff41;
+            box-shadow: 0 0 12px rgba(0, 255, 65, 0.2);
+            position: relative;
+            z-index: 1000;
+        }
+
+        .video-controls h3 {
+            font-size: 9px;
+            color: #00cc33;
+            text-align: center;
+            margin: 0 0 6px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #00ff41;
+            padding-bottom: 4px;
+        }
+
+        .video-controls button {
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            margin: 0;
+            font-size: 16px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .video-controls button::before {
+            content: attr(data-icon);
+        }
+
+        .video-controls button::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: 100%;
+            top: 50%;
+            transform: translateY(-50%);
+            margin-left: 10px;
+            padding: 6px 10px;
+            background: #1a1a1a;
+            border: 1px solid #00ff41;
+            color: #00ff41;
+            font-size: 10px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            text-transform: none;
+            letter-spacing: normal;
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
+            z-index: 100000;
+        }
+
+        .video-controls button:hover::after {
+            opacity: 1;
+        }
+
+        .video-controls button:active {
+            transform: scale(0.95);
+        }
+
+        #phoneFrame {
+            position: relative;
+            background: #000;
+            border-radius: 20px;
+            border: 3px solid #00ff41;
+            box-shadow: 0 0 30px rgba(0, 255, 65, 0.5);
+            overflow: hidden;
+            /* 宽高由 JavaScript 动态设置 */
+            box-sizing: border-box;
+        }
+
+        /* LIVE indicator */
+        #phoneFrame::after {
+            content: "[LIVE]";
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            color: #ff0000;
+            font-size: 12px;
+            font-weight: bold;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 3px 8px;
+            border: 1px solid #ff0000;
+            z-index: 10;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            cursor: crosshair;
+            position: relative;
+            z-index: 9999;
+        }
+
+        #touchIndicator {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(0, 255, 65, 0.2);
+            border: 2px solid #00ff41;
+            pointer-events: none;
+            display: none;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.8);
+            z-index: 101;
+        }
+
+        #errorMessage {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #330000;
+            color: #ff0000;
+            padding: 15px 25px;
+            border: 3px solid #ff0000;
+            display: none;
+            z-index: 10000;
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.5);
+            max-width: 400px;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 0 0 10px #ff0000;
+        }
+
+        #errorMessage.show {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 1200px) {
+            .main-container {
+                flex-direction: column;
+                height: auto;
+                overflow-y: auto;
+            }
+
+            .panel-left,
+            .panel-right {
+                width: 100%;
+                min-width: auto;
+            }
+
+            .panel-left {
+                min-height: 400px;
+            }
+
+            .log-section {
+                min-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <!-- Left: Device Connection Panel -->
+        <div class="panel-left">
+            <!-- Device Connection Section -->
+            <div>
+                <h2>
+                    设备连接
+                    <span class="status-indicators">
+                        <span id="deviceStatusDot" class="status-dot disconnected" title="设备状态"></span>
+                        <span id="socketStatusDot" class="status-dot disconnected" title="Socket.IO 状态"></span>
+                    </span>
+                </h2>
+
+                <!-- Device Selection and Connection -->
+                <div class="section">
+                    <div class="input-group">
+                        <select id="deviceSelect">
+                            <option value="">-- 获取设备列表 --</option>
+                        </select>
+                        <button id="refreshDevicesBtn" class="icon-button" title="刷新设备列表">↻</button>
+                    </div>
+                    <button id="connectDeviceBtn">连接设备</button>
+                </div>
+            </div>
+
+            <!-- Log Section -->
+            <div class="log-section">
+                <div id="logContainer" class="log-container">
+                    <div class="log-controls">
+                        <button id="clearLogBtn" class="secondary">清空</button>
+                        <label>
+                            <input type="checkbox" id="autoScroll" checked>
+                            自动滚动
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Video Display -->
+        <div class="panel-right">
+            <h2>视频显示</h2>
+            <div id="videoContainer" class="video-container">
+                <!-- Control buttons on the left -->
+                <div class="video-controls">
+                    <h3>控制</h3>
+                    <button id="powerToggleBtn"
+                            data-icon="⏻"
+                            data-tooltip="锁屏/解锁"
+                            title="锁屏/解锁屏幕"></button>
+                </div>
+
+                <!-- Video frame on the right -->
+                <div id="phoneFrame">
+                    <canvas id="canvas"></canvas>
+                    <div id="touchIndicator"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="errorMessage"></div>
+
+    <script type="module">
+        import { ScrcpyClient } from './sdk/index.js';
+
+        // ========== API 配置 ==========
+        const API_BASE = () => `${window.location.protocol}//${window.location.host}`;
+
+        // ========== 日志系统 ==========
+        function log(message, level = 'info') {
+            const logContainer = document.getElementById('logContainer');
+            if (!logContainer) return;
+
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${level}`;
+            entry.innerHTML = `<span class="log-timestamp">[${timestamp}]</span>${escapeHtml(message)}`;
+            logContainer.appendChild(entry);
+
+            if (document.getElementById('autoScroll') && document.getElementById('autoScroll').checked) {
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+
+            console.log(`[${level.toUpperCase()}] ${message}`);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ========== 设备管理 API ==========
+        async function fetchDevices() {
+            try {
+                log('获取设备列表...', 'info');
+                const response = await fetch(`${API_BASE()}/devices`);
+                if (!response.ok) throw new Error('获取设备列表失败');
+
+                const devices_response = await response.json();
+                const devices = devices_response.devices;
+                log(`获取到 ${devices.length} 个设备`, 'success');
+
+                const select = document.getElementById('deviceSelect');
+                select.innerHTML = '<option value="">-- 选择设备 --</option>';
+                devices.forEach(device => {
+                    const option = document.createElement('option');
+                    option.value = device.serial;
+                    option.textContent = device.serial + " : " + device.status;
+                    select.appendChild(option);
+                });
+                if (devices.length > 0) {
+                    select.value = devices[0].serial;
+                }
+            } catch (error) {
+                log(`获取设备列表失败: ${error.message}`, 'error');
+            }
+        }
+
+        // ========== Scrcpy Client ==========
+        let client = null;
+        const canvas = document.getElementById('canvas');
+
+        async function connectToDevice() {
+            const connectBtn = document.getElementById('connectDeviceBtn');
+            const deviceSerial = document.getElementById('deviceSelect').value;
+
+            // 检查是否需要断开连接
+            if (connectBtn.textContent === '断开连接') {
+                disconnectDevice();
+                return;
+            }
+
+            if (!deviceSerial) {
+                log('请先选择设备', 'warn');
+                return;
+            }
+
+            try {
+                // 禁用按钮，防止重复点击
+                connectBtn.disabled = true;
+                connectBtn.textContent = '连接中...';
+
+                log(`连接到设备: ${deviceSerial}`, 'info');
+                const response = await fetch(`${API_BASE()}/connect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ serial: deviceSerial })
+                });
+
+                if (!response.ok) throw new Error('连接设备失败');
+
+                const data = await response.json();
+                const port = data.data.socketio_port;
+                log(`设备连接成功, Socket.IO 端口: ${port}`, 'success');
+
+                // 更新设备状态点
+                document.getElementById('deviceStatusDot').classList.remove('disconnected');
+                document.getElementById('deviceStatusDot').classList.add('connected');
+
+                // 创建 Scrcpy 客户端
+                client = new ScrcpyClient({
+                    canvas: canvas,
+                    onConnected: () => {
+                        log('Scrcpy 客户端已连接', 'success');
+                        updateConnectButton(true);
+                    },
+                    onDisconnected: (reason) => {
+                        log(`Scrcpy 客户端已断开: ${reason}`, 'warn');
+                        updateConnectButton(false);
+                        updateSocketStatusDot(false);
+                    },
+                    onError: (error) => {
+                        log(`错误: ${error.message}`, 'error');
+                    },
+                    onFrame: (frameData) => {
+                        // 保存当前视频尺寸
+                        currentVideoSize = { width: frameData.width, height: frameData.height };
+                        // 更新 phoneFrame 的宽高比以匹配视频
+                        updatePhoneFrameAspectRatio(frameData.width, frameData.height);
+                    },
+                    onLog: (message, level) => {
+                        log(message, level);
+                    }
+                });
+
+                // 连接到设备
+                await client.connect(deviceSerial, port);
+                // 注意：updateSocketStatusDot 会在 client 的 onConnected 回调中调用
+                // 这里不再手动设置，以避免时机问题
+
+            } catch (error) {
+                log(`连接设备失败: ${error.message}`, 'error');
+                updateConnectButton(false);
+            } finally {
+                connectBtn.disabled = false;
+            }
+        }
+
+        function disconnectDevice() {
+            if (client) {
+                client.destroy();
+                client = null;
+            }
+
+            // 清空画布
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 恢复默认尺寸
+            setDefaultPhoneFrameSize();
+
+            // 更新状态点
+            updateSocketStatusDot(false);
+            document.getElementById('deviceStatusDot').classList.remove('connected');
+            document.getElementById('deviceStatusDot').classList.add('disconnected');
+
+            // 更新按钮
+            updateConnectButton(false);
+
+            log('已断开连接', 'info');
+        }
+
+        function updateConnectButton(isConnected) {
+            const connectBtn = document.getElementById('connectDeviceBtn');
+
+            if (isConnected) {
+                connectBtn.textContent = '断开连接';
+                connectBtn.classList.add('disconnect');
+            } else {
+                connectBtn.textContent = '连接设备';
+                connectBtn.classList.remove('disconnect');
+            }
+        }
+
+        function updateSocketStatusDot(connected) {
+            const dot = document.getElementById('socketStatusDot');
+            if (connected) {
+                dot.classList.remove('disconnected');
+                dot.classList.add('connected');
+            } else {
+                dot.classList.remove('connected');
+                dot.classList.add('disconnected');
+            }
+        }
+
+        // ========== 辅助函数 ==========
+        /**
+         * 计算 panel-right 中视频容器的最大可用高度
+         */
+        function getMaxAvailableHeight() {
+            const panelRight = document.querySelector('.panel-right');
+            if (!panelRight) return window.innerHeight - 100;
+
+            // 获取 panel-right 的高度
+            const panelHeight = panelRight.clientHeight;
+
+            // 减去标题高度、内边距等
+            const titleHeight = panelRight.querySelector('h2')?.offsetHeight || 0;
+            const paddingTop = 20; // CSS padding-top
+            const gap = 30; // video-container gap
+
+            return panelHeight - titleHeight - paddingTop - gap - 40; // 40px 底部间距
+        }
+
+        /**
+         * 设置 phoneFrame 的默认尺寸（9:16 占位符）
+         */
+        function setDefaultPhoneFrameSize() {
+            const phoneFrame = document.getElementById('phoneFrame');
+            if (!phoneFrame) return;
+
+            // 计算最大可用高度
+            const maxHeight = getMaxAvailableHeight();
+
+            // 默认使用 9:16 宽高比
+            const aspectRatio = 9 / 16;
+
+            // 高度取最大值
+            const height = maxHeight;
+            const width = height * aspectRatio;
+
+            phoneFrame.style.width = `${width}px`;
+            phoneFrame.style.height = `${height}px`;
+
+            console.log(`[PhoneFrame] Default size: ${width.toFixed(1)}x${height.toFixed(1)}px (9:16)`);
+        }
+
+        /**
+         * 根据视频实际尺寸更新 phoneFrame 大小
+         * @param {number} videoWidth - 视频实际宽度
+         * @param {number} videoHeight - 视频实际高度
+         */
+        function updatePhoneFrameAspectRatio(videoWidth, videoHeight) {
+            const phoneFrame = document.getElementById('phoneFrame');
+            if (!phoneFrame) return;
+
+            // 计算视频宽高比
+            const aspectRatio = videoWidth / videoHeight;
+
+            // 计算最大可用高度
+            const maxHeight = getMaxAvailableHeight();
+
+            // 高度固定为最大值
+            const height = maxHeight;
+
+            // 宽度根据视频宽高比计算
+            const width = height * aspectRatio;
+
+            phoneFrame.style.width = `${width}px`;
+            phoneFrame.style.height = `${height}px`;
+
+            // 存储信息供调试使用
+            phoneFrame.dataset.videoWidth = videoWidth;
+            phoneFrame.dataset.videoHeight = videoHeight;
+            phoneFrame.dataset.aspectRatio = aspectRatio.toFixed(4);
+
+            console.log(`[PhoneFrame] Video: ${videoWidth}x${videoHeight} (${aspectRatio.toFixed(4)}), Display: ${width.toFixed(1)}x${height.toFixed(1)}px`);
+        }
+
+        // ========== Canvas 事件处理 ==========
+        let isDragging = false;
+
+        // 注意：事件监听器会在 client 连接后检查 isConnected()
+        // 所以不需要在连接后重新绑定
+        canvas.addEventListener('mousedown', (e) => {
+            if (!client || !client.isConnected()) {
+                console.log('[Canvas] mousedown ignored - client not connected');
+                return;
+            }
+
+            isDragging = true;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            console.log('[Canvas] mousedown at:', x, y);
+            client.sendTouchByCanvasCoords(client.Constants.ACTION_DOWN, x, y);
+            showTouchIndicator(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDragging || !client || !client.isConnected()) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            client.sendTouchByCanvasCoords(client.Constants.ACTION_MOVE, x, y);
+            showTouchIndicator(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (!isDragging || !client || !client.isConnected()) return;
+
+            isDragging = false;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            console.log('[Canvas] mouseup at:', x, y);
+            client.sendTouchByCanvasCoords(client.Constants.ACTION_UP, x, y);
+        });
+
+        canvas.addEventListener('mouseleave', (e) => {
+            if (isDragging && client && client.isConnected()) {
+                isDragging = false;
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                client.sendTouchByCanvasCoords(client.Constants.ACTION_CANCEL, x, y);
+            }
+        });
+
+        // 触摸事件支持 (移动设备)
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (!client || !client.isConnected()) {
+                console.log('[Canvas] touchstart ignored - client not connected');
+                return;
+            }
+
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+
+            console.log('[Canvas] touchstart at:', x, y);
+            client.sendTouchByCanvasCoords(client.Constants.ACTION_DOWN, x, y);
+            showTouchIndicator(touch.clientX, touch.clientY);
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (!client || !client.isConnected()) return;
+
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const x = touch.clientX - rect.left;
+            const y = touch.clientY - rect.top;
+
+            client.sendTouchByCanvasCoords(client.Constants.ACTION_MOVE, x, y);
+            showTouchIndicator(touch.clientX, touch.clientY);
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (!client || !client.isConnected()) return;
+
+            console.log('[Canvas] touchend');
+            // 使用最后的位置
+            client.sendTouchByCanvasCoords(client.Constants.ACTION_UP, 0, 0);
+        });
+
+        // ========== 键盘输入支持 ==========
+        canvas.setAttribute('tabindex', '0');
+
+        canvas.addEventListener('keydown', (e) => {
+            e.preventDefault();
+            if (!client || !client.isConnected()) return;
+
+            // 处理特殊按键
+            if (e.key === 'Enter') {
+                client.sendKeyByName('Enter');
+            } else if (e.key === 'Backspace') {
+                client.sendKeyByName('Backspace');
+            } else if (e.key === 'Delete') {
+                client.sendKeyByName('Delete');
+            } else if (e.key === 'Tab') {
+                client.sendKeyByName('Tab');
+            } else if (e.key === 'Escape') {
+                client.sendKeyByName('Escape');
+            } else if (e.key.length === 1) {
+                // 普通字符输入
+                client.sendText(e.key);
+            }
+        });
+
+        canvas.addEventListener('focus', () => {
+            canvas.style.outline = '2px solid #4caf50';
+        });
+
+        canvas.addEventListener('blur', () => {
+            canvas.style.outline = 'none';
+        });
+
+        canvas.addEventListener('mouseenter', () => {
+            canvas.focus();
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            canvas.blur();
+        });
+
+        // ========== 辅助函数 ==========
+        function showTouchIndicator(x, y) {
+            const indicator = document.getElementById('touchIndicator');
+            const phoneFrame = document.getElementById('phoneFrame');
+            const rect = phoneFrame.getBoundingClientRect();
+
+            indicator.style.left = (x - rect.left) + 'px';
+            indicator.style.top = (y - rect.top) + 'px';
+            indicator.style.display = 'block';
+
+            setTimeout(() => {
+                indicator.style.display = 'none';
+            }, 200);
+        }
+
+        // ========== 按钮事件 ==========
+        let screenPowerOn = true;
+
+        document.getElementById('powerToggleBtn').addEventListener('click', () => {
+            if (!client || !client.isConnected()) return;
+
+            screenPowerOn = !screenPowerOn;
+            client.setPower(screenPowerOn);
+
+            const powerBtn = document.getElementById('powerToggleBtn');
+            powerBtn.setAttribute('data-tooltip', screenPowerOn ? '点击锁屏' : '点击亮屏');
+        });
+
+        document.getElementById('refreshDevicesBtn').addEventListener('click', fetchDevices);
+        document.getElementById('connectDeviceBtn').addEventListener('click', connectToDevice);
+
+        document.getElementById('clearLogBtn').addEventListener('click', () => {
+            const logContainer = document.getElementById('logContainer');
+            const logEntries = logContainer.querySelectorAll('.log-entry');
+            logEntries.forEach(entry => entry.remove());
+            log('日志已清空', 'info');
+        });
+
+        // ========== 窗口大小改变时重新计算显示尺寸 ==========
+        let currentVideoSize = null;
+        window.addEventListener('resize', () => {
+            if (currentVideoSize && client && client.isConnected()) {
+                updatePhoneFrameAspectRatio(currentVideoSize.width, currentVideoSize.height);
+            }
+        });
+
+        // ========== 初始化 ==========
+        window.addEventListener('DOMContentLoaded', () => {
+            log('页面已加载', 'success');
+            log('开始初始化...', 'info');
+
+            // 设置默认 phoneFrame 尺寸（9:16 占位符）
+            setDefaultPhoneFrameSize();
+
+            // 设置初始 canvas 尺寸
+            canvas.width = 540;
+            canvas.height = 960;
+
+            // 清空画布
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 绘制提示文字
+            ctx.fillStyle = '#666';
+            ctx.font = '20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('请先连接设备', canvas.width / 2, canvas.height / 2);
+
+            // 自动获取设备列表
+            fetchDevices();
+
+            log('初始化完成', 'success');
+        });
+    </script>
+</body>
+</html>
