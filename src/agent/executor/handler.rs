@@ -7,7 +7,7 @@ use tracing::{debug, info, warn, error};
 
 /// 操作处理器，负责执行和调度操作
 pub struct ActionHandler {
-    device: Arc<dyn Device>,
+    device: Option<Arc<dyn Device>>,
     max_retries: u32,
     retry_delay_ms: u64,
 }
@@ -16,7 +16,7 @@ impl ActionHandler {
     /// 创建新的操作处理器
     pub fn new(device: Arc<dyn Device>) -> Self {
         Self {
-            device,
+            device: Some(device),
             max_retries: 3,
             retry_delay_ms: 1000,
         }
@@ -39,6 +39,9 @@ impl ActionHandler {
         &self,
         action: &ActionEnum,
     ) -> Result<ActionResult, AppError> {
+        let device = self.device.as_ref()
+            .ok_or_else(|| AppError::Unknown("Device 未初始化".to_string()))?;
+
         let mut last_error = None;
 
         for attempt in 0..=self.max_retries {
@@ -54,7 +57,7 @@ impl ActionHandler {
                 .await;
             }
 
-            match action.execute(self.device.as_ref()).await {
+            match action.execute(device.as_ref()).await {
                 Ok(result) => {
                     if result.success {
                         debug!("操作成功: {}", action.description());
@@ -83,17 +86,13 @@ impl ActionHandler {
     ) -> Result<ActionResult, AppError> {
         debug!("执行解析的操作: {} {:?}", parsed.action_type, parsed.parameters);
 
-        // 特殊处理 launch 操作，将 app_name 转换为 package
-        let params = if parsed.action_type == "launch" {
-            self.convert_launch_params(parsed.parameters.clone())
-                .map_err(|e| AppError::Unknown(format!("转换 launch 参数失败: {}", e)))?
-        } else {
-            parsed.parameters.clone()
-        };
+        // 转换参数格式以匹配 Action 结构体
+        let params = self.convert_action_params(&parsed.action_type, parsed.parameters.clone())
+            .map_err(|e| AppError::Unknown(format!("参数转换失败: {}", e)))?;
 
         // 从 JSON 创建 ActionEnum
         let action = ActionEnum::from_json(&parsed.action_type, params)
-            .map_err(|e| AppError::Unknown(format!("创建操作失败: {}", e)))?;
+            .map_err(|e| AppError::Unknown(format!("创建 Action 失败: {}", e)))?;
 
         // 验证操作
         action.validate().map_err(|e| {
@@ -104,24 +103,100 @@ impl ActionHandler {
         self.execute_with_retry(&action).await
     }
 
-    /// 转换 launch 操作的参数，将 app_name 转换为 package
-    fn convert_launch_params(
+    /// 转换 Action 参数格式
+    /// 将提示词中的参数格式转换为 Action 结构体需要的格式
+    fn convert_action_params(
         &self,
+        action_type: &str,
         mut params: serde_json::Value,
     ) -> Result<serde_json::Value, AppError> {
-        // 如果有 app_name 字段，转换为 package
-        if let Some(app_name) = params.get("app_name").and_then(|v| v.as_str()) {
-            // 使用 system.rs 中的函数转换
-            let package = crate::agent::actions::system::app_name_to_package(app_name)
-                .ok_or_else(|| AppError::Unknown(format!("无法识别的应用名称: {}", app_name)))?;
+        let obj = params.as_object_mut()
+            .ok_or_else(|| AppError::Unknown("参数不是对象".to_string()))?;
 
-            // 添加或替换 package 字段
-            if let Some(obj) = params.as_object_mut() {
-                obj.insert("package".to_string(), serde_json::json!(package));
+        match action_type {
+            // Tap/Long Press: element=[x,y] -> x, y
+            "tap" | "long_press" | "double_tap" => {
+                if let Some(element) = obj.remove("element") {
+                    if let Some(arr) = element.as_array() {
+                        if arr.len() >= 2 {
+                            if let (Some(x), Some(y)) = (arr[0].as_u64(), arr[1].as_u64()) {
+                                obj.insert("x".to_string(), serde_json::json!(x));
+                                obj.insert("y".to_string(), serde_json::json!(y));
+                            }
+                        }
+                    }
+                }
             }
+
+            // Swipe: start=[x1,y1], end=[x2,y2] -> start_x, start_y, end_x, end_y
+            "swipe" => {
+                if let Some(start) = obj.remove("start") {
+                    if let Some(arr) = start.as_array() {
+                        if arr.len() >= 2 {
+                            if let (Some(x), Some(y)) = (arr[0].as_u64(), arr[1].as_u64()) {
+                                obj.insert("start_x".to_string(), serde_json::json!(x));
+                                obj.insert("start_y".to_string(), serde_json::json!(y));
+                            }
+                        }
+                    }
+                }
+                if let Some(end) = obj.remove("end") {
+                    if let Some(arr) = end.as_array() {
+                        if arr.len() >= 2 {
+                            if let (Some(x), Some(y)) = (arr[0].as_u64(), arr[1].as_u64()) {
+                                obj.insert("end_x".to_string(), serde_json::json!(x));
+                                obj.insert("end_y".to_string(), serde_json::json!(y));
+                            }
+                        }
+                    }
+                }
+                // 如果没有 duration_ms，设置默认值
+                if !obj.contains_key("duration_ms") {
+                    obj.insert("duration_ms".to_string(), serde_json::json!(500));
+                }
+            }
+
+            // Launch: app="..." -> package="..."
+            "launch" => {
+                if let Some(app) = obj.remove("app") {
+                    if let Some(app_name) = app.as_str() {
+                        let package = crate::agent::actions::system::app_name_to_package(app_name)
+                            .ok_or_else(|| AppError::Unknown(format!("无法识别的应用名称: {}", app_name)))?;
+                        obj.insert("package".to_string(), serde_json::json!(package));
+                    }
+                }
+            }
+
+            // Wait: duration=1 -> duration_ms=1000, message="..." -> reason="..."
+            "wait" => {
+                if let Some(duration) = obj.remove("duration") {
+                    // duration 可能是数字（秒）或字符串
+                    let duration_ms = if let Some(seconds) = duration.as_u64() {
+                        seconds * 1000
+                    } else if let Some(seconds_str) = duration.as_str() {
+                        // 尝试解析字符串
+                        seconds_str.parse::<u64>()
+                            .map(|s| s * 1000)
+                            .unwrap_or(1000)
+                    } else {
+                        1000 // 默认 1 秒
+                    };
+                    obj.insert("duration_ms".to_string(), serde_json::json!(duration_ms));
+                }
+                // 如果没有 duration_ms，设置默认值
+                if !obj.contains_key("duration_ms") {
+                    obj.insert("duration_ms".to_string(), serde_json::json!(1000));
+                }
+                // message -> reason
+                if let Some(message) = obj.remove("message") {
+                    obj.insert("reason".to_string(), message);
+                }
+            }
+
+            _ => {}
         }
 
-        Ok(params)
+        Ok(serde_json::Value::Object(obj.clone()))
     }
 }
 
@@ -129,6 +204,7 @@ impl ActionHandler {
 mod tests {
     use super::*;
     use crate::agent::actions::TapAction;
+    use crate::agent::core::traits::ParsedAction;
 
     // 注意：这些测试需要 mock device 实现
 
@@ -137,5 +213,95 @@ mod tests {
         // 这是一个占位测试，实际需要 mock device
         // let handler = ActionHandler::new(device);
         // assert_eq!(handler.max_retries, 3);
+    }
+
+    #[test]
+    fn test_convert_tap_params() {
+        let handler = ActionHandler::new_uninitialized();
+        let params = serde_json::json!({
+            "element": [500, 800]
+        });
+
+        let result = handler.convert_action_params("tap", params).unwrap();
+        assert_eq!(result.get("x").unwrap().as_u64().unwrap(), 500);
+        assert_eq!(result.get("y").unwrap().as_u64().unwrap(), 800);
+        assert!(result.get("element").is_none());
+    }
+
+    #[test]
+    fn test_convert_swipe_params() {
+        let handler = ActionHandler::new_uninitialized();
+        let params = serde_json::json!({
+            "start": [100, 200],
+            "end": [300, 400]
+        });
+
+        let result = handler.convert_action_params("swipe", params).unwrap();
+        assert_eq!(result.get("start_x").unwrap().as_u64().unwrap(), 100);
+        assert_eq!(result.get("start_y").unwrap().as_u64().unwrap(), 200);
+        assert_eq!(result.get("end_x").unwrap().as_u64().unwrap(), 300);
+        assert_eq!(result.get("end_y").unwrap().as_u64().unwrap(), 400);
+        assert_eq!(result.get("duration_ms").unwrap().as_u64().unwrap(), 500); // 默认值
+    }
+
+    #[test]
+    fn test_convert_launch_params() {
+        let handler = ActionHandler::new_uninitialized();
+        let params = serde_json::json!({
+            "app": "微信"
+        });
+
+        let result = handler.convert_action_params("launch", params).unwrap();
+        assert_eq!(result.get("package").unwrap().as_str().unwrap(), "com.tencent.mm");
+        assert!(result.get("app").is_none());
+    }
+
+    #[test]
+    fn test_convert_type_params() {
+        let handler = ActionHandler::new_uninitialized();
+        let params = serde_json::json!({
+            "text": "Hello World"
+        });
+
+        let result = handler.convert_action_params("type", params).unwrap();
+        assert_eq!(result.get("text").unwrap().as_str().unwrap(), "Hello World");
+    }
+
+    #[test]
+    fn test_convert_wait_params() {
+        let handler = ActionHandler::new_uninitialized();
+        let params = serde_json::json!({
+            "duration": 1,
+            "message": "应用正在加载中，请稍等。"
+        });
+
+        let result = handler.convert_action_params("wait", params).unwrap();
+        assert_eq!(result.get("duration_ms").unwrap().as_u64().unwrap(), 1000);
+        assert_eq!(result.get("reason").unwrap().as_str().unwrap(), "应用正在加载中，请稍等。");
+        assert!(result.get("duration").is_none());
+        assert!(result.get("message").is_none());
+    }
+
+    #[test]
+    fn test_convert_wait_params_with_string_duration() {
+        let handler = ActionHandler::new_uninitialized();
+        let params = serde_json::json!({
+            "duration": "2"
+        });
+
+        let result = handler.convert_action_params("wait", params).unwrap();
+        assert_eq!(result.get("duration_ms").unwrap().as_u64().unwrap(), 2000);
+    }
+}
+
+impl ActionHandler {
+    /// 用于测试的构造函数（不需要 device）
+    fn new_uninitialized() -> Self {
+        // 这是一个用于测试的辅助方法
+        Self {
+            device: None,
+            max_retries: 3,
+            retry_delay_ms: 1000,
+        }
     }
 }

@@ -8,197 +8,82 @@ use crate::agent::llm::types::{ChatRequest, ModelConfig};
 use serde::{Deserialize, Serialize};
 
 /// 获取系统提示词
-fn get_system_prompt() -> String {
+pub fn get_system_prompt(screen_width: u32, screen_height: u32) -> String {
     let current_date = chrono::Local::now().format("%Y年%m月%d日").to_string();
+    format!(r#"#
+The current date:  {current_date}
 
-    format!(r#"# 角色定义
-你是一个专业的 Android 手机自动化操作助手。你的任务是通过分析当前屏幕状态，理解用户的指令，然后决定下一步要执行的操作。
+# Device Information
+- Screen Resolution: {screen_width}x{screen_height}
+- Screen Width: {screen_width} pixels
+- Screen Height: {screen_height} pixels
 
-# 当前日期
-{current_date}
+# Setup
+You are a professional Android operation agent assistant that can fulfill the user's high-level instructions. Given a screenshot of the Android interface at each step, you first analyze the situation, then plan the best course of action using Python-style pseudo-code.
 
-# 核心原则
-1. 仔细观察屏幕，理解当前的界面状态
-2. 根据用户任务，判断当前状态与目标的差距
-3. 选择最合适的操作，逐步完成任务
-4. 每次只执行一个操作，不要尝试一次完成多个步骤
-5. 如果任务完成或无法完成，使用 finish 操作
+# More details about the code
+Your response format must be structured as follows:
 
-# 可用操作
+Think first: Use <think>...</think> to analyze the current screen, identify key elements, and determine the most efficient action.
+Provide the action: Use <answer>...</answer> to return a single line of pseudo-code representing the operation.
 
-## 1. Launch - 启动应用
-启动指定的 Android 应用
-**格式**: `do(action="Launch", app="应用名称")`
-**参数**:
-- app: 应用名称（如"微信"、"淘宝"、"支付宝"等）或包名
+Your output should STRICTLY follow the format:
+<think>
+[Your thought]
+</think>
+<answer>
+[Your operation code]
+</answer>
 
-**示例**:
-- `do(action="Launch", app="微信")` - 启动微信应用
-- `do(action="Launch", app="com.tencent.mm")` - 使用包名启动微信
+- **Tap**
+  Perform a tap action on a specified screen area. The element is a list of 2 integers, representing the coordinates of the tap point.
+  **Example**:
+  <answer>
+  do(action="Tap", element=[x,y])
+  </answer>
+- **Type**
+  Enter text into the currently focused input field.
+  **Example**:
+  <answer>
+  do(action="Type", text="Hello World")
+  </answer>
+- **Swipe**
+  Perform a swipe action with start point and end point.
+  **Examples**:
+  <answer>
+  do(action="Swipe", start=[x1,y1], end=[x2,y2])
+  </answer>
+- **Long Press**
+  Perform a long press action on a specified screen area.
+  You can add the element to the action to specify the long press area. The element is a list of 2 integers, representing the coordinates of the long press point.
+  **Example**:
+  <answer>
+  do(action="Long Press", element=[x,y])
+  </answer>
+- **Launch**
+  Launch an app. Try to use launch action when you need to launch an app. Check the instruction to choose the right app before you use this action.
+  **Example**:
+  <answer>
+  do(action="Launch", app="Settings")
+  </answer>
+- **Back**
+  Press the Back button to navigate to the previous screen.
+  **Example**:
+  <answer>
+  do(action="Back")
+  </answer>
+- **Finish**
+  Terminate the program and optionally print a message.
+  **Example**:
+  <answer>
+  finish(message="Task completed.")
+  </answer>
 
-## 2. Tap - 点击
-点击屏幕上的指定位置
-**格式**: `do(action="Tap", x=100, y=200)` 或 `do(action="Tap", element=[500, 800])`
-**参数**:
-- x: X 坐标
-- y: Y 坐标
-- 或 element: [x, y] 数组格式
 
-**示例**:
-- `do(action="Tap", x=500, y=800)` - 点击坐标 (500, 800)
-- `do(action="Tap", element=[360, 640])` - 点击坐标 (360, 640)
-
-## 3. DoubleTap - 双击
-快速双击屏幕指定位置
-**格式**: `do(action="DoubleTap", x=100, y=200)`
-**参数**: 与 Tap 相同
-
-## 4. LongPress - 长按
-长按屏幕指定位置
-**格式**: `do(action="LongPress", x=100, y=200, duration_ms=1000)`
-**参数**:
-- x: X 坐标
-- y: Y 坐标
-- duration_ms: 长按时长（毫秒），可选，默认 1000ms
-
-## 5. Swipe - 滑动
-从起点滑动到终点
-**格式**: `do(action="Swipe", start=[100, 200], end=[300, 400], duration_ms=500)`
-**参数**:
-- start: [start_x, start_y] 起点坐标
-- end: [end_x, end_y] 终点坐标
-- duration_ms: 滑动时长（毫秒），可选，默认 500ms
-
-## 6. Scroll - 滚动
-在屏幕上滚动
-**格式**: `do(action="Scroll", direction="up", distance=0.5)`
-**参数**:
-- direction: "up"（向上滚动）或 "down"（向下滚动）
-- distance: 滚动距离（屏幕高度的比例，0.0-1.0），可选，默认 0.5
-
-## 7. Type - 输入文本
-在当前焦点处输入文本
-**格式**: `do(action="Type", text="要输入的文本")`
-**参数**:
-- text: 要输入的文本内容
-
-## 8. PressKey - 按键
-模拟物理按键
-**格式**: `do(action="PressKey", keycode="HOME")`
-**参数**:
-- keycode: 按键名称，如 "HOME", "BACK", "ENTER" 等
-
-## 9. Back - 返回
-点击返回键
-**格式**: `do(action="Back")`
-
-## 10. Home - 主页
-点击主页键
-**格式**: `do(action="Home")`
-
-## 11. Recent - 最近任务
-打开最近任务界面
-**格式**: `do(action="Recent")`
-
-## 12. Notification - 通知栏
-下拉通知栏
-**格式**: `do(action="Notification")`
-
-## 13. Wait - 等待
-等待指定时间
-**格式**: `do(action="Wait", duration_ms=1000)`
-**参数**:
-- duration_ms: 等待时长（毫秒）
-
-## 14. Screenshot - 截图
-获取当前屏幕截图
-**格式**: `do(action="Screenshot")`
-
-## 15. Finish - 完成任务
-表示任务完成或无法完成
-**格式**: `finish(message="任务说明")`
-**参数**:
-- message: 任务完成说明或失败原因
-
-# 响应格式要求
-
-## 重要提示
-你必须严格按照以下格式输出操作，否则将无法被正确解析：
-
-1. **操作格式**: 使用 `do(action="操作名", 参数1=值1, 参数2=值2)` 格式
-2. **完成格式**: 使用 `finish(message="说明")` 格式
-3. **参数值**: 字符串参数使用引号包裹，数字参数不需要引号
-4. **一次一个**: 每次只输出一个操作
-5. **清晰明确**: 不要使用模糊的描述
-
-## 正确示例
-```
-用户任务: 打开微信发送消息给张三
-
-分析: 我看到用户在主屏幕，需要先启动微信应用
-do(action="Launch", app="微信")
-
-分析: 微信已启动，我需要找到搜索框来搜索联系人
-do(action="Tap", x=360, y=150)
-
-分析: 我在搜索框中输入"张三"
-do(action="Type", text="张三")
-
-分析: 我看到搜索结果中第一个就是张三，点击打开对话
-do(action="Tap", x=540, y=300)
-
-分析: 我点击输入框准备输入消息
-do(action="Tap", x=540, y=1800)
-
-分析: 我输入消息内容
-do(action="Type", text="你好，在吗？")
-
-分析: 我点击发送按钮
-do(action="Tap", x=980, y=1800)
-
-分析: 消息已发送，任务完成
-finish(message="已成功发送消息给张三")
-```
-
-## 错误示例（不要这样）
-```
-❌ 点击微信图标
-❌ Launch app: WeChat
-❌ {{"action": "tap", "x": 100, "y": 200}}
-❌ 我要点击屏幕中间
-```
-
-# 思考流程
-1. **观察屏幕**: 识别当前界面状态（主屏幕、应用内、对话框等）
-2. **理解任务**: 明确用户的最终目标
-3. **判断差距**: 当前状态与目标状态之间还缺少什么步骤
-4. **选择操作**: 根据可用操作，选择最合适的一步
-5. **确认参数**: 为操作提供准确的参数（坐标、文本等）
-6. **输出操作**: 使用严格的格式输出
-
-# 坐标系说明
-- 屏幕坐标系: 原点在左上角，X轴向右，Y轴向下
-- 常见屏幕尺寸: 1080x2400, 1440x3200 等
-- 你需要根据截图准确判断点击位置
-
-# 注意事项
-1. **等待应用加载**: 启动应用或切换界面后，可能需要等待 1-2 秒
-2. **处理弹窗**: 如果出现权限请求、广告等弹窗，先关闭它们
-3. **网络延迟**: 涉及网络操作的步骤，等待时间可能需要更长
-4. **失败处理**: 如果操作失败（如应用未安装），使用 finish 说明原因
-5. **逐步完成**: 不要跳过中间步骤，一次只做一件事
-
-# 常见应用包名参考
-- 微信: com.tencent.mm
-- 支付宝: com.eg.android.AlipayGphone
-- 淘宝: com.taobao.taobao
-- 抖音: com.ss.android.ugc.aweme
-- QQ: com.tencent.mobileqq
-- 设置: com.android.settings
-- 浏览器: com.android.browser
-
-# 总结
-你的核心任务是: 观察屏幕 → 理解任务 → 选择操作 → 输出格式化的操作指令。严格按照 `do(action="...", ...)` 或 `finish(message="...")` 格式输出，确保每次只执行一个明确操作。"#)
+REMEMBER:
+- Think before you act: Always analyze the current UI and the best course of action before executing any step, and output in <think> part.
+- Only ONE LINE of action in <answer> part per response: Each step must contain exactly one line of executable code.
+- Generate execution code strictly according to format requirements."#,)
 }
 
 /// AutoGLM 流式响应的增量数据
@@ -238,9 +123,9 @@ impl AutoGLMClient {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout))
-            .connect_timeout(Duration::from_secs(10))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .tcp_keepalive(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(120))
+            .tcp_keepalive(Duration::from_secs(600))
             .build()
             .map_err(|e| ModelError::ApiError(format!("创建 HTTP 客户端失败: {}", e)))?;
 
@@ -313,21 +198,31 @@ impl AutoGLMClient {
         info!("  模型: {}", request.model);
         info!("  消息数: {}", request.messages.len());
 
-        // 打印请求详情（调试用）
-        if let Err(e) = self._send_request(&url, &request).await {
-            error!("AutoGLM 请求失败: {}", e);
-            error!("请检查:");
-            error!("  1. API Key 是否正确设置");
-            error!("  2. 网络连接是否正常");
-            error!("  3. API 端点是否可访问: {}", self.config.base_url);
-            error!("  4. 是否有足够的配额");
-            return Err(e);
-        } else {
-            return self._send_request(&url, &request).await;
+        // 发送请求并处理错误
+        match self._send_request(&url, &request).await {
+            Ok(response) => Ok(response),
+            Err(e) => {
+                error!("AutoGLM 请求失败: {}", e);
+                error!("请检查:");
+                error!("  1. API Key 是否正确设置");
+                error!("  2. 网络连接是否正常");
+                error!("  3. API 端点是否可访问: {}", self.config.base_url);
+                error!("  4. 是否有足够的配额");
+                Err(e)
+            }
         }
     }
 
     async fn _send_request(&self, url: &str, request: &ChatRequest) -> Result<ChatResponse, ModelError> {
+        // 打印请求详情（选择性输出，过滤图片数据）
+        info!("========== AutoGLM 请求 ==========");
+        info!("URL: {}", url);
+        info!("模型: {}", request.model);
+        info!("参数: max_tokens={:?}, temperature={:?}, top_p={:?}, stream={:?}",
+            request.max_tokens, request.temperature, request.top_p, request.stream);
+        info!("消息数量: {}", request.messages.len());
+        info!("================================");
+
         let response = self
             .client
             .post(url)
@@ -349,7 +244,11 @@ impl AutoGLMClient {
             .await
             .map_err(|e| ModelError::NetworkError(format!("读取响应失败: {}", e)))?;
 
-        debug!("响应内容长度: {} {} 字节", response_text, response_text.len());
+        // 打印响应详情
+        info!("========== AutoGLM 响应 ==========");
+        info!("状态码: {}", status);
+        info!("响应体 ({} 字节):", response_text.len());
+        info!("================================");
 
         if !status.is_success() {
             warn!("AutoGLM 请求失败: {} - {}", status, response_text);
@@ -372,7 +271,7 @@ impl AutoGLMClient {
 
         let chat_response: ChatResponse = serde_json::from_str(&response_text).map_err(|e| {
             warn!("解析 AutoGLM 响应失败: {}", e);
-            warn!("响应内容: {}", &response_text[..response_text.len().min(500)]);
+            warn!("响应内容: {}", &response_text);
             ModelError::ParseError(format!("解析响应失败: {}", e))
         })?;
 
@@ -381,214 +280,158 @@ impl AutoGLMClient {
 
     /// 解析 AutoGLM 响应（支持特殊标记）
     ///
-    /// 解析规则：
-    /// 1. 如果包含 'finish(message='，之前的是 thinking，从标记开始的是 action
-    /// 2. 如果包含 'do(action='，之前的是 thinking，从标记开始的是 action
-    /// 3. 如果包含 '<answer>'，使用 XML 标签解析
-    /// 4. 否则，全部内容作为 action
+    /// 解析规则（严格按照 Python 代码）：
+    /// 1. 如果包含 'finish(message='，之前的是 thinking，使用 parser 解析 action
+    /// 2. 如果包含 'do(action='，之前的是 thinking，使用 parser 解析 action
+    /// 3. 如果包含 '<answer>'，使用 XML 标签解析，然后用 parser 解析 action
+    /// 4. 否则，thinking 为空，尝试用 parser 解析全部内容
     fn parse_response(&self, content: &str) -> (String, Option<ParsedAction>) {
-        // 规则 1: 检查 finish(message=
-        if content.contains("finish(message=") {
-            let parts: Vec<&str> = content.splitn(2, "finish(message=").collect();
-            let thinking = parts[0].trim().to_string();
-            let action_str = "finish(message=".to_string() + parts.get(1).unwrap_or(&"");
+        use crate::agent::llm::parser::{try_parse_do_action, try_parse_finish_action, parse_action_from_response};
 
-            if let Some(action) = self.parse_autoglm_action(&action_str) {
+        // 规则 1: 检查 finish(message=
+        if let Some(pos) = content.find("finish(message=") {
+            let thinking = content[..pos].trim().to_string();
+            let action_str = "finish(message=".to_string() + &content[pos + 16..];
+
+            // 使用 parser 解析 finish action
+            if let Some(action) = try_parse_finish_action(&action_str) {
                 return (thinking, Some(action));
             }
+            // 如果解析失败，返回原始 action 字符串
+            let action = ParsedAction {
+                action_type: "raw".to_string(),
+                parameters: serde_json::json!({ "raw": action_str }),
+                reasoning: action_str.clone(),
+            };
+            return (thinking, Some(action));
         }
 
         // 规则 2: 检查 do(action=
-        if content.contains("do(action=") {
-            let parts: Vec<&str> = content.splitn(2, "do(action=").collect();
-            let thinking = parts[0].trim().to_string();
-            let action_str = "do(action=".to_string() + parts.get(1).unwrap_or(&"");
+        if let Some(pos) = content.find("do(action=") {
+            let thinking = content[..pos].trim().to_string();
+            let action_str = "do(action=".to_string() + &content[pos + 10..];
 
-            if let Some(action) = self.parse_autoglm_action(&action_str) {
+            // 使用 parser 解析 do action
+            if let Some(action) = try_parse_do_action(&action_str) {
+                return (thinking, Some(action));
+            }
+            // 如果解析失败，返回原始 action 字符串
+            let action = ParsedAction {
+                action_type: "raw".to_string(),
+                parameters: serde_json::json!({ "raw": action_str }),
+                reasoning: action_str.clone(),
+            };
+            return (thinking, Some(action));
+        }
+
+        // 规则 3: 回退到 XML 标签解析
+        // Python 代码: thinking = parts[0].replace("<thinking>", "").replace("</thinking>", "").strip()
+        if let Some(start) = content.find("<answer>") {
+            if let Some(end) = content.find("</answer>") {
+                // 提取 <answer> 之前的内容作为 thinking
+                let thinking_raw = &content[..start];
+                // 移除 <thinking> 和 </thinking> 标签（只移除标签，保留中间内容）
+                let thinking = thinking_raw
+                    .replace("<thinking>", "")
+                    .replace("</thinking>", "")
+                    .trim()
+                    .to_string();
+                let action_content = content[start + 8..end].to_string(); // 8 = len("<answer>")
+
+                // 尝试解析 action
+                if let Ok(Some(action)) = parse_action_from_response(&action_content) {
+                    return (thinking, Some(action));
+                }
+
+                // 如果解析失败，返回原始 action 字符串
+                let action = ParsedAction {
+                    action_type: "raw".to_string(),
+                    parameters: serde_json::json!({ "raw": action_content }),
+                    reasoning: action_content,
+                };
                 return (thinking, Some(action));
             }
         }
 
-        // 规则 3: 回退到 XML 标签解析
-        if content.contains("<answer>") {
-            if let Some(start) = content.find("<answer>") {
-                if let Some(end) = content.find("</answer>") {
-                    let thinking = content[..start]
-                        .replace("", "")
-                        .replace("", "")
-                        .trim()
-                        .to_string();
-                    let action_content = &content[start + 8..end]; // 8 = len("<answer>")
-
-                    // 尝试解析 action
-                    if let Some(action) = self.parse_action_from_text(action_content) {
-                        return (thinking, Some(action));
-                    }
-                }
-            }
+        // 规则 4: 没有找到标记，thinking 为空，尝试用 parser 解析全部内容
+        if let Ok(Some(action)) = parse_action_from_response(content) {
+            return (String::new(), Some(action));
         }
 
-        // 规则 4: 没有找到标记，返回全部内容
-        (String::new(), self.parse_action_from_text(content))
+        // 如果所有解析都失败，返回原始内容作为 action
+        let action = ParsedAction {
+            action_type: "raw".to_string(),
+            parameters: serde_json::json!({ "raw": content }),
+            reasoning: content.to_string(),
+        };
+        (String::new(), Some(action))
     }
 
-    /// 解析 AutoGLM 特殊格式的 action
-    fn parse_autoglm_action(&self, action_str: &str) -> Option<ParsedAction> {
-        // 解析 finish(message="...")
-        if action_str.starts_with("finish(message=") {
-            if let Some(end) = action_str.find(')') {
-                let message = &action_str[16..end]; // 16 = len("finish(message=")
-                return Some(ParsedAction {
-                    action_type: "finish".to_string(),
-                    parameters: serde_json::json!({
-                        "result": message.trim_matches('"'),
-                        "success": true
-                    }),
-                    reasoning: action_str.to_string(),
-                });
-            }
-        }
-
-        // 解析 do(action=...)
-        if action_str.starts_with("do(action=") {
-            // 提取 action 名称
-            let remaining = &action_str[10..]; // 10 = len("do(action=")
-
-            // 尝试找到动作名称的结束位置
-            if let Some(end) = remaining.find(|c| c == '(' || c == ',' || c == ')') {
-                let action_name = &remaining[..end];
-
-                // 尝试解析参数
-                let parameters = if let Some(params_start) = remaining.find('(') {
-                    if let Some(params_end) = remaining[params_start..].find(')') {
-                        let params_str = &remaining[params_start + 1..params_start + params_end];
-                        self.parse_action_params(params_str)
-                    } else {
-                        serde_json::json!({})
-                    }
-                } else {
-                    serde_json::json!({})
-                };
-
-                return Some(ParsedAction {
-                    action_type: action_name.to_string(),
-                    parameters,
-                    reasoning: action_str.to_string(),
-                });
-            }
-        }
-
-        // 回退到常规解析
-        self.parse_action_from_text(action_str)
-    }
-
-    /// 解析 action 参数字符串
-    fn parse_action_params(&self, params_str: &str) -> serde_json::Value {
-        let mut params = serde_json::Map::new();
-
-        for param in params_str.split(',') {
-            let param = param.trim();
-            if let Some(eq_pos) = param.find('=') {
-                let key = &param[..eq_pos];
-                let value = &param[eq_pos + 1..];
-
-                // 尝试解析值
-                let parsed_value = if value.contains('"') {
-                    // 字符串值
-                    serde_json::json!(value.trim_matches('"').to_string())
-                } else {
-                    // 尝试解析为数字
-                    value.parse::<i64>()
-                        .map(|v| serde_json::json!(v))
-                        .unwrap_or_else(|_| serde_json::json!(value))
-                };
-
-                params.insert(key.to_string(), parsed_value);
-            }
-        }
-
-        serde_json::Value::Object(params)
-    }
-
-    /// 从文本解析 action
-    fn parse_action_from_text(&self, text: &str) -> Option<ParsedAction> {
-        use crate::agent::llm::parser;
-
-        // 首先尝试常规解析
-        if let Ok(Some(action)) = parser::parse_action_from_response(text) {
-            return Some(action);
-        }
-
-        // 尝试解析 JSON 格式
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(text) {
-            if let Some(action_type) = json.get("action_type")
-                .or(json.get("type"))
-                .and_then(|v| v.as_str())
-            {
-                return Some(ParsedAction {
-                    action_type: action_type.to_string(),
-                    parameters: json,
-                    reasoning: text.to_string(),
-                });
-            }
-        }
-
-        None
-    }
 }
 
 #[async_trait]
 impl ModelClient for AutoGLMClient {
-    async fn query(
+    async fn query_with_messages(
         &self,
-        prompt: &str,
+        messages: Vec<crate::agent::core::traits::ChatMessage>,
         screenshot: Option<&str>,
     ) -> Result<ModelResponse, ModelError> {
-        debug!("查询 AutoGLM，提示词长度: {}", prompt.len());
+        debug!("查询 AutoGLM，消息数量: {}", messages.len());
 
         let start_time = Instant::now();
 
-        // 构建消息
-        let mut messages = vec![];
+        // 转换消息格式
+        let mut api_messages = vec![];
 
-        // 添加系统提示
-        let system_prompt = get_system_prompt();
-        messages.push(crate::agent::llm::types::ChatMessage {
-            role: crate::agent::llm::types::MessageRole::System,
-            content: crate::agent::llm::types::MessageContent::Text(system_prompt),
+        // 找到最后一条用户消息的索引（用于添加截图）
+        let last_user_msg_index = messages.iter().rposition(|msg| {
+            matches!(msg.role, crate::agent::core::traits::MessageRole::User)
         });
 
-        // 添加用户消息（可能包含图片）
-        let user_content = if let Some(screenshot) = screenshot {
-            crate::agent::llm::types::MessageContent::Multimodal(vec![
-                crate::agent::llm::types::ContentBlock {
-                    block_type: "image_url".to_string(),
-                    text: None,
-                    image_url: Some(crate::agent::llm::types::ImageUrl::from_base64(screenshot)),
-                },
-                crate::agent::llm::types::ContentBlock {
-                    block_type: "text".to_string(),
-                    text: Some(prompt.to_string()),
-                    image_url: None,
-                },
-            ])
-        } else {
-            crate::agent::llm::types::MessageContent::Text(prompt.to_string())
-        };
+        for (idx, msg) in messages.iter().enumerate() {
+            let role = match msg.role {
+                crate::agent::core::traits::MessageRole::System => {
+                    crate::agent::llm::types::MessageRole::System
+                }
+                crate::agent::core::traits::MessageRole::User => {
+                    crate::agent::llm::types::MessageRole::User
+                }
+                crate::agent::core::traits::MessageRole::Assistant => {
+                    crate::agent::llm::types::MessageRole::Assistant
+                }
+            };
 
-        messages.push(crate::agent::llm::types::ChatMessage {
-            role: crate::agent::llm::types::MessageRole::User,
-            content: user_content,
-        });
+            // 只在最后一条用户消息中添加截图
+            let is_last_user_msg = last_user_msg_index == Some(idx);
+
+            let content = if is_last_user_msg && screenshot.is_some() {
+                crate::agent::llm::types::MessageContent::Multimodal(vec![
+                    crate::agent::llm::types::ContentBlock {
+                        block_type: "image_url".to_string(),
+                        text: None,
+                        image_url: Some(crate::agent::llm::types::ImageUrl::from_base64(screenshot.unwrap())),
+                    },
+                    crate::agent::llm::types::ContentBlock {
+                        block_type: "text".to_string(),
+                        text: Some(msg.content.clone()),
+                        image_url: None,
+                    },
+                ])
+            } else {
+                crate::agent::llm::types::MessageContent::Text(msg.content.clone())
+            };
+
+            api_messages.push(crate::agent::llm::types::ChatMessage { role, content });
+        }
 
         // 构建请求
         let request = ChatRequest {
             model: self.config.model_name.clone(),
-            messages,
+            messages: api_messages,
             max_tokens: Some(self.config.max_tokens),
             temperature: Some(self.config.temperature),
             top_p: Some(self.config.top_p),
-            stream: Some(false), // 暂时使用非流式
+            stream: Some(false),
         };
 
         // 发送请求
@@ -619,9 +462,7 @@ impl ModelClient for AutoGLMClient {
         info!("📊 AutoGLM 性能指标:");
         info!("   总推理时间: {:.3}s", total_time);
         info!("   使用 tokens: {}", usage.total_tokens);
-        if !thinking.is_empty() {
-            info!("   思考过程: {}", thinking);
-        }
+        info!("   思考过程: {}", &content);
 
         Ok(ModelResponse {
             content: content.clone(),
@@ -679,29 +520,120 @@ mod tests {
 finish(message="Task completed successfully")"#;
 
         let (thinking, action) = client.parse_response(response);
-        assert!(!thinking.is_empty());
+
+        // 验证 thinking 部分
+        assert_eq!(thinking, "Thinking...");
+
+        // 验证 action 解析成功
         assert!(action.is_some());
-        assert_eq!(action.unwrap().action_type, "finish");
+        let action = action.unwrap();
+        assert_eq!(action.action_type, "finish");
+        assert_eq!(action.parameters.get("result").unwrap().as_str().unwrap(), "Task completed successfully");
     }
 
     #[test]
     fn test_parse_do_action() {
         let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
         let response = r#"Analyzing screen...
-do(action=tap, x=100, y=200)"#;
+do(action="Tap", element=[500, 800])"#;
 
         let (thinking, action) = client.parse_response(response);
+
+        // 验证 thinking 部分
+        assert_eq!(thinking, "Analyzing screen...");
+
+        // 验证 action 解析成功
         assert!(action.is_some());
-        assert_eq!(action.unwrap().action_type, "tap");
+        let action = action.unwrap();
+        assert_eq!(action.action_type, "tap");
+        // element 应该被解析为数组
+        assert!(action.parameters.get("element").is_some());
     }
 
     #[test]
-    fn test_parse_xml_answer() {
+    fn test_parse_xml_answer_with_json() {
         let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
         let response = r#"<thinking>I should tap the button</thinking>
 <answer>{"action_type": "tap", "x": 100, "y": 200}</answer>"#;
 
         let (thinking, action) = client.parse_response(response);
+
+        // 验证 thinking 部分（移除 <thinking> 标签后）
+        assert_eq!(thinking.trim(), "I should tap the button");
+
+        // 验证 action 解析成功
         assert!(action.is_some());
+        let action = action.unwrap();
+        assert_eq!(action.action_type, "tap");
+        assert_eq!(action.parameters.get("x").unwrap().as_u64().unwrap(), 100);
+        assert_eq!(action.parameters.get("y").unwrap().as_u64().unwrap(), 200);
+    }
+
+    #[test]
+    fn test_parse_no_markers() {
+        let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
+        let response = r#"Some random text without markers"#;
+
+        let (thinking, action) = client.parse_response(response);
+
+        // 规则 4: thinking 应该为空
+        assert!(thinking.is_empty());
+
+        // 无法解析的内容返回 raw
+        assert!(action.is_some());
+        let action = action.unwrap();
+        assert_eq!(action.action_type, "raw");
+        assert_eq!(action.reasoning, "Some random text without markers");
+    }
+
+    #[test]
+    fn test_parse_priority() {
+        let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
+
+        // finish(message= 优先级最高
+        let response1 = r#"Text...
+do(action=tap)
+finish(message="done")"#;
+        let (thinking, action) = client.parse_response(response1);
+        assert!(thinking.contains("Text..."));
+        assert_eq!(action.unwrap().action_type, "finish");
+
+        // do(action= 第二优先级
+        let response2 = r#"<thinking>Thought</thinking>
+<answer>answer content</answer>
+do(action="Launch", app="微信")"#;
+        let (_thinking, action) = client.parse_response(response2);
+        assert_eq!(action.unwrap().action_type, "launch");
+    }
+
+    #[test]
+    fn test_parse_do_action_launch() {
+        let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
+        let response = r#"I need to open WeChat.
+do(action="Launch", app="微信")"#;
+
+        let (thinking, action) = client.parse_response(response);
+
+        assert_eq!(thinking, "I need to open WeChat.");
+        assert!(action.is_some());
+        let action = action.unwrap();
+        assert_eq!(action.action_type, "launch");
+        assert_eq!(action.parameters.get("app").unwrap().as_str().unwrap(), "微信");
+    }
+
+    #[test]
+    fn test_parse_do_action_wait() {
+        let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
+        let response = r#"应用正在加载中
+do(action="Wait", duration=1, message="应用正在加载中，请稍等。")"#;
+
+        let (thinking, action) = client.parse_response(response);
+
+        assert_eq!(thinking, "应用正在加载中");
+        assert!(action.is_some());
+        let action = action.unwrap();
+        assert_eq!(action.action_type, "wait");
+        assert_eq!(action.parameters.get("duration").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(action.parameters.get("message").unwrap().as_str().unwrap(), "应用正在加载中，请稍等。");
     }
 }

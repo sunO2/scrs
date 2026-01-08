@@ -243,15 +243,31 @@ pub enum AgentFeedback {
 /// LLM 客户端 trait
 #[async_trait]
 pub trait ModelClient: Send + Sync {
-    /// 查询模型（支持文本和图片）
-    async fn query(
+    /// 使用消息历史查询模型（支持多轮对话）
+    async fn query_with_messages(
         &self,
-        prompt: &str,
+        messages: Vec<ChatMessage>,
         screenshot: Option<&str>,
     ) -> Result<ModelResponse, ModelError>;
 
     /// 获取模型信息
     fn info(&self) -> ModelInfo;
+}
+
+/// 聊天消息（用于多轮对话）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChatMessage {
+    pub role: MessageRole,
+    pub content: String,
+}
+
+/// 消息角色
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    System,
+    User,
+    Assistant,
 }
 
 /// 模型响应

@@ -3,10 +3,10 @@ use tokio::sync::{RwLock, Mutex};
 use tokio::task::AbortHandle;
 use tracing::{debug, info, warn, error};
 use crate::agent::core::traits::{Device, Agent, AgentStatus, AgentFeedback, ExecutionStep, ModelClient};
-use crate::agent::core::traits::{ModelResponse, ParsedAction};
 use crate::agent::core::state::{AgentRuntime, AgentConfig, AgentState};
 use crate::agent::executor::ActionHandler;
-use crate::agent::context::{ConversationContext, MessageRole, ShortTermMemory};
+use crate::agent::context::{ConversationContext, ShortTermMemory};
+use crate::agent::logger::AgentLogger;
 use crate::error::AppError;
 
 /// 手机自动化 Agent
@@ -19,6 +19,8 @@ pub struct PhoneAgent {
     conversation: Arc<ConversationContext>,
     memory: Arc<ShortTermMemory>,
     abort_handle: Arc<Mutex<Option<AbortHandle>>>,
+    messages: Arc<RwLock<Vec<crate::agent::core::traits::ChatMessage>>>,
+    logger: Arc<AgentLogger>,
 }
 
 impl PhoneAgent {
@@ -31,6 +33,11 @@ impl PhoneAgent {
     ) -> Result<Self, AppError> {
         let action_handler = Arc::new(ActionHandler::new(Arc::clone(&device)));
 
+        // 创建日志记录器
+        let log_dir = "logs/agent";
+        let logger = Arc::new(AgentLogger::new(&id, log_dir)
+            .map_err(|e| AppError::Unknown(format!("创建日志记录器失败: {}", e)))?);
+
         Ok(Self {
             id,
             device,
@@ -40,6 +47,8 @@ impl PhoneAgent {
             conversation: Arc::new(ConversationContext::new(50)),
             memory: Arc::new(ShortTermMemory::new(3600)), // 默认 TTL 1小时
             abort_handle: Arc::new(Mutex::new(None)),
+            messages: Arc::new(RwLock::new(Vec::new())),
+            logger,
         })
     }
 
@@ -48,40 +57,85 @@ impl PhoneAgent {
         &self.id
     }
 
-    /// 构建提示词
-    async fn build_prompt(&self, task: &str, step: usize) -> String {
-        let mut prompt = self.conversation.build_prompt(task).await;
+    /// 初始化消息列表（添加系统提示词）
+    async fn initialize_messages(&self, system_prompt: String) {
+        let mut messages = self.messages.write().await;
+        messages.clear();
+        messages.push(crate::agent::core::traits::ChatMessage {
+            role: crate::agent::core::traits::MessageRole::System,
+            content: system_prompt,
+        });
+    }
 
-        // 添加当前状态信息
-        prompt.push_str(&format!("\n当前步骤: {}\n", step));
+    /// 添加用户消息
+    async fn add_user_message(&self, content: String) {
+        let mut messages = self.messages.write().await;
+        messages.push(crate::agent::core::traits::ChatMessage {
+            role: crate::agent::core::traits::MessageRole::User,
+            content,
+        });
+    }
 
-        // 添加屏幕信息
-        if let Ok((width, height)) = self.device.screen_size().await {
-            prompt.push_str(&format!("屏幕尺寸: {}x{}\n", width, height));
-        }
-
-        prompt.push_str("\n请分析当前屏幕并决定下一步操作。");
-
-        prompt
+    /// 添加助手消息（操作执行结果）
+    async fn add_assistant_message(&self, content: String) {
+        let mut messages = self.messages.write().await;
+        messages.push(crate::agent::core::traits::ChatMessage {
+            role: crate::agent::core::traits::MessageRole::Assistant,
+            content,
+        });
     }
 
     /// 运行 Agent 主循环
     async fn run_agent_loop(&self, task: String) {
         info!("Agent {} 开始执行任务: {}", self.id, task);
 
+        // 记录任务开始
+        if let Err(e) = self.logger.log_task_start(&task).await {
+            warn!("记录任务开始失败: {}", e);
+        }
+
+        // 获取屏幕尺寸
+        let (screen_width, screen_height) = match self.device.screen_size().await {
+            Ok((w, h)) => (w, h),
+            Err(e) => {
+                warn!("获取屏幕尺寸失败: {}, 使用默认值 1080x2400", e);
+                (1080, 2400) // 使用默认值
+            }
+        };
+
+        // 初始化消息列表（添加系统提示词和用户任务）
+        let system_prompt = crate::agent::llm::autoglm_client::get_system_prompt(screen_width, screen_height);
+        self.initialize_messages(system_prompt).await;
+
+        // 添加初始用户任务
+        let initial_user_message = format!(
+            "任务: {}\n\n 请分析当前屏幕并决定 需要怎么操作。告诉我的操作尽量简洁 并且需要严格按照do(action= 格式回复 否则我无法解析",
+            task
+        );
+        self.add_user_message(initial_user_message.clone()).await;
+
         let mut step = 0;
         let mut no_action_count = 0; // 连续无操作计数
+        let loop_start_time = std::time::Instant::now();
 
         loop {
             // 检查是否超过最大步数
             if step >= self.runtime.config.max_steps {
-                self.fail(format!("超过最大步数限制: {}", step)).await;
+                let error = format!("超过最大步数限制: {}", step);
+                self.fail(error.clone()).await;
+                if let Err(e) = self.logger.log_task_failed(&error, step).await {
+                    warn!("记录任务失败失败: {}", e);
+                }
                 break;
             }
 
             // 检查连续无操作次数（防止无限循环）
             if no_action_count >= 3 {
-                self.fail(format!("连续 {} 次未返回有效操作，停止执行", no_action_count)).await;
+                let error = format!("连续 {} 次未返回有效操作，停止执行", no_action_count);
+                self.fail(error.clone()).await;
+                if let Err(e) = self.logger.log_task_failed(&error, step).await {
+                    warn!("记录任务失败失败: {}", e);
+                }
                 break;
             }
 
@@ -89,7 +143,11 @@ impl PhoneAgent {
             let elapsed = self.runtime.elapsed_ms().await;
             let max_time_ms = self.runtime.config.max_execution_time * 1000;
             if elapsed > max_time_ms {
-                self.fail(format!("执行超时: {}ms > {}ms", elapsed, max_time_ms)).await;
+                let error = format!("执行超时: {}ms > {}ms", elapsed, max_time_ms);
+                self.fail(error.clone()).await;
+                if let Err(e) = self.logger.log_task_failed(&error, step).await {
+                    warn!("记录任务失败失败: {}", e);
+                }
                 break;
             }
 
@@ -98,33 +156,54 @@ impl PhoneAgent {
 
             // 截取屏幕
             debug!("步骤 {}: 截取屏幕", step);
+            let screenshot_start = std::time::Instant::now();
             let screenshot = match self.device.screenshot().await {
                 Ok(s) => s,
                 Err(e) => {
-                    self.fail(format!("截图失败: {}", e)).await;
+                    let error = format!("截图失败: {}", e);
+                    self.fail(error.clone()).await;
+                    if let Err(e) = self.logger.log_task_failed(&error, step).await {
+                        warn!("记录任务失败失败: {}", e);
+                    }
                     break;
                 }
             };
+            let screenshot_duration = screenshot_start.elapsed();
 
-            // 构建提示词
-            let prompt = self.build_prompt(&task, step).await;
+            // 获取当前消息列表
+            let current_messages = self.messages.read().await.clone();
+            let messages_count = current_messages.len();
 
-            // 查询 LLM
-            debug!("步骤 {}: 查询 LLM", step);
-            let model_response = match self.model_client.query(&prompt, Some(&screenshot)).await {
+            // 克隆消息用于日志记录（在移动之前）
+            let messages_for_log = current_messages.clone();
+
+            // 使用消息列表查询 LLM
+            debug!("步骤 {}: 查询 LLM (消息数: {})", step, messages_count);
+            let query_start = std::time::Instant::now();
+            let model_response = match self.model_client.query_with_messages(current_messages, Some(&screenshot)).await {
                 Ok(r) => r,
                 Err(e) => {
-                    self.fail(format!("LLM 查询失败: {}", e)).await;
+                    let error = format!("LLM 查询失败: {}", e);
+                    self.fail(error.clone()).await;
+                    if let Err(e) = self.logger.log_task_failed(&error, step).await {
+                        warn!("记录任务失败失败: {}", e);
+                    }
                     break;
                 }
             };
+            let query_duration = query_start.elapsed();
 
             // 检查是否有操作
             let parsed_action = match model_response.action {
                 Some(action) => action,
                 None => {
-                    // 没有操作，可能只是思考，继续循环
-                    debug!("步骤 {}: LLM 没有返回操作，继续", step);
+                    // 没有解析到有效操作，添加反馈消息让 LLM 重新回复
+                    info!("没有解析到有效操作，添加反馈消息让 LLM 重新回复");
+                    let feedback_msg = format!(
+                        "你的回复中没有包含 do(action=...) 格式的执行动作，我无法解析。\n\n请严格按照 do(action=ActionType, ...) 格式回复，例如：\n- do(action=\"Tap\", element=[x,y])\n- do(action=\"Type\", text=\"xxx\")\n- do(action=\"Swipe\", start=[x1,y1], end=[x2,y2])\n- do(action=\"Launch\", app=\"xxx\")\n- do(action=\"Back\")\n\n请重新分析屏幕并告诉我下一步操作。"
+                    );
+                    self.add_assistant_message(model_response.content).await;
+                    self.add_user_message(feedback_msg).await;
                     no_action_count += 1;
                     step = self.runtime.increment_step().await;
                     continue;
@@ -136,7 +215,23 @@ impl PhoneAgent {
 
             // 检查是否完成
             if parsed_action.action_type == "finish" {
-                self.complete(step, model_response.content).await;
+                // 添加助手完成消息
+                let reasoning = model_response.reasoning.clone().unwrap_or_default();
+                let completion_msg = format!(
+                    "任务完成。{}\n思考过程: {}",
+                    model_response.content,
+                    reasoning
+                );
+                self.add_assistant_message(completion_msg).await;
+
+                let total_duration = loop_start_time.elapsed().as_millis() as u64;
+                let result_content = model_response.content.clone();
+                self.complete(step, result_content.clone()).await;
+
+                // 记录任务完成
+                if let Err(e) = self.logger.log_task_complete(&result_content, step, total_duration).await {
+                    warn!("记录任务完成失败: {}", e);
+                }
                 break;
             }
 
@@ -154,34 +249,96 @@ impl PhoneAgent {
                     warn!("操作执行失败: {}", e);
                     // 继续执行，不中断
                     crate::agent::core::traits::ActionResult::failure(
-                        format!("操作失败: {}", e),
+                        format!("{}", e),
                         0
                     )
                 }
             };
 
             // 记录步骤
+            let reasoning_text = model_response.reasoning.clone().unwrap_or_default();
             let execution_step = ExecutionStep {
                 step_number: step,
                 action_type: parsed_action.action_type.clone(),
                 action_description: parsed_action.reasoning.clone(),
-                result: action_result,
+                result: action_result.clone(),
                 timestamp: chrono::Utc::now(),
                 screenshot: screenshot.clone(),
-                reasoning: model_response.reasoning.unwrap_or_default(),
+                reasoning: reasoning_text.clone(),
             };
 
             self.runtime.add_step(execution_step).await;
 
-            // 添加到对话上下文
+            // 添加到对话上下文（保留旧代码）
             self.conversation.add_message(
                 crate::agent::context::MessageRole::Assistant,
                 format!("执行操作: {}", parsed_action.action_type),
-                Some(screenshot),
+                Some(screenshot.clone()),
             ).await;
+
+            // 将助手响应添加到消息列表
+            let assistant_response = format!(
+                "我决定执行: {}\n操作类型: {}\n参数: {}\n思考: {}",
+                parsed_action.action_type,
+                parsed_action.action_type,
+                parsed_action.parameters,
+                reasoning_text
+            );
+            self.add_assistant_message(assistant_response).await;
+
+            // 将操作结果格式化并添加为用户消息
+            let result_summary = if action_result.success {
+                format!(
+                    "操作结果（步骤 {}）:\n- 操作: {}\n- 状态: 成功\n- 详情: {}\n- 耗时: {}ms\n\n请分析当前屏幕并决定下一步操作。",
+                    step,
+                    parsed_action.action_type,
+                    action_result.message,
+                    action_result.duration_ms
+                )
+            } else {
+                format!(
+                    "操作结果（步骤 {}）:\n- 操作: {}\n- 状态: 失败\n- 错误: {}\n- 耗时: {}ms\n\n请分析失败原因并决定下一步操作。",
+                    step,
+                    parsed_action.action_type,
+                    action_result.message,
+                    action_result.duration_ms
+                )
+            };
+            self.add_user_message(result_summary).await;
 
             // 增加步数
             step = self.runtime.increment_step().await;
+
+            // 记录操作日志
+            use crate::agent::logger::{ActionResultLog, LogMessage};
+            let total_step_duration = query_duration + screenshot_duration + std::time::Duration::from_millis(action_result.duration_ms as u64);
+
+            // 将消息转换为日志格式
+            let log_messages: Vec<LogMessage> = messages_for_log.iter().map(|msg| {
+                LogMessage {
+                    role: format!("{:?}", msg.role).to_lowercase(),
+                    content: msg.content.clone(),
+                }
+            }).collect();
+
+            if let Err(e) = self.logger.log_action(
+                step - 1, // 使用之前的 step（increment 之前）
+                log_messages,
+                Some(screenshot.clone()),
+                model_response.content.clone(),
+                model_response.reasoning.clone(),
+                parsed_action.action_type.clone(),
+                parsed_action.parameters.clone(),
+                Some(ActionResultLog {
+                    success: action_result.success,
+                    message: action_result.message.clone(),
+                    duration_ms: action_result.duration_ms,
+                }),
+                model_response.tokens_used,
+                total_step_duration.as_millis() as u64,
+            ).await {
+                warn!("记录操作日志失败: {}", e);
+            }
 
             // 等待一段时间再继续
             tokio::time::sleep(std::time::Duration::from_millis(
@@ -218,12 +375,21 @@ impl Agent for PhoneAgent {
     async fn start(&self, task: String) -> Result<String, AppError> {
         // 检查当前状态
         let state = self.runtime.state.read().await;
-        if !matches!(*state, AgentState::Idle) {
+        let should_reset = matches!(*state, AgentState::Completed { .. } | AgentState::Failed { .. });
+        let can_start = should_reset || matches!(*state, AgentState::Idle);
+        drop(state);
+
+        if !can_start {
             return Err(AppError::AgentError(
                 crate::agent::core::traits::AgentError::AlreadyRunning,
             ));
         }
-        drop(state);
+
+        // 如果已完成或失败，重置状态
+        if should_reset {
+            info!("Agent {} 已完成/失败，重置状态以重新启动", self.id);
+            self.runtime.reset().await;
+        }
 
         // 初始化
         *self.runtime.state.write().await = AgentState::Initializing;
@@ -240,6 +406,8 @@ impl Agent for PhoneAgent {
             conversation: Arc::clone(&self.conversation),
             memory: Arc::clone(&self.memory),
             abort_handle: Arc::clone(&self.abort_handle),
+            messages: Arc::clone(&self.messages),
+            logger: Arc::clone(&self.logger),
         };
 
         let handle = tokio::spawn(async move {

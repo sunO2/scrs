@@ -11,6 +11,7 @@ pub mod config;
 pub mod api;
 pub mod pool;
 pub mod socket_server;
+pub mod logger;
 
 // 重新导出核心类型
 pub use core::{

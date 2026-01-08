@@ -51,7 +51,7 @@ impl Default for AgentConfig {
         Self {
             max_steps: 50,
             max_execution_time: 300, // 5 分钟
-            action_delay: 500,
+            action_delay: 1000,
             screenshot_quality: 80,
             enable_retry: true,
             max_retries: 3,

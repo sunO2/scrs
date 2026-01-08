@@ -47,8 +47,8 @@ async fn main() {
             }),
         base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
         max_tokens: 4096,
-        temperature: 0.0,
-        top_p: 0.85,
+        temperature: 0.2,
+        top_p: 0.1,
         timeout: 60, // 增加超时时间到 60 秒
     };
 

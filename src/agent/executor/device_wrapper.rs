@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use crate::agent::core::traits::Device;
 use crate::error::AppError;
 use crate::scrcpy::scrcpy::ScrcpyConnect;
@@ -13,6 +14,10 @@ pub struct ScrcpyDeviceWrapper {
     name: String,
     scrcpy_connect: Arc<ScrcpyConnect>,
     adb_device: Arc<ADBServerDevice>,
+    /// 物理分辨率（实际屏幕像素）
+    physical_resolution: Arc<RwLock<Option<(u32, u32)>>>,
+    /// 渲染分辨率（应用看到的逻辑分辨率）
+    override_resolution: Arc<RwLock<Option<(u32, u32)>>>,
 }
 
 impl ScrcpyDeviceWrapper {
@@ -28,7 +33,91 @@ impl ScrcpyDeviceWrapper {
             name,
             scrcpy_connect,
             adb_device,
+            physical_resolution: Arc::new(RwLock::new(None)),
+            override_resolution: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// 转换坐标：从逻辑坐标（Override resolution）转换为物理坐标（Physical resolution）
+    async fn convert_to_physical_coords(&self, logical_x: u32, logical_y: u32) -> Result<(u32, u32), AppError> {
+        let physical = self.physical_resolution.read().await;
+        let override_res = self.override_resolution.read().await;
+
+        match (*physical, *override_res) {
+            (Some((phys_w, phys_h)), Some((override_w, override_h))) => {
+                // 计算缩放比例
+                let scale_x = (phys_w as f64) / (override_w as f64);
+                let scale_y = (phys_h as f64) / (override_h as f64);
+
+                let physical_x = (logical_x as f64 * scale_x) as u32;
+                let physical_y = (logical_y as f64 * scale_y) as u32;
+
+                debug!("坐标转换: ({}, {}) -> ({}, {}) [缩放: x={:.2}, y={:.2}]",
+                    logical_x, logical_y, physical_x, physical_y, scale_x, scale_y);
+
+                Ok((physical_x, physical_y))
+            }
+            _ => {
+                // 如果没有分辨率信息，直接返回原始坐标
+                debug!("没有分辨率信息，不进行坐标转换: ({}, {})", logical_x, logical_y);
+                Ok((logical_x, logical_y))
+            }
+        }
+    }
+
+    /// 刷新分辨率信息
+    pub async fn refresh_resolution(&self) -> Result<(), AppError> {
+        let output = self.adb_shell("wm size").await?;
+        self.parse_and_store_resolution(&output).await
+    }
+
+    /// 解析并存储分辨率信息
+    async fn parse_and_store_resolution(&self, output: &str) -> Result<(), AppError> {
+        let mut physical = self.physical_resolution.write().await;
+        let mut override_res = self.override_resolution.write().await;
+
+        *physical = None;
+        *override_res = None;
+
+        for line in output.lines() {
+            if line.contains("Physical size:") {
+                if let Some(size_part) = line.split("Physical size:").nth(1) {
+                    let size_str = size_part.trim();
+                    if let Some(pos) = size_str.find('x') {
+                        let width_str = &size_str[..pos];
+                        let height_str = &size_str[pos + 1..];
+
+                        let width = width_str.trim().parse::<u32>().ok();
+                        let height = height_str.trim().parse::<u32>().ok();
+
+                        if let (Some(w), Some(h)) = (width, height) {
+                            *physical = Some((w, h));
+                            info!("物理分辨率: {}x{}", w, h);
+                        }
+                    }
+                }
+            }
+
+            if line.contains("Override size:") {
+                if let Some(size_part) = line.split("Override size:").nth(1) {
+                    let size_str = size_part.trim();
+                    if let Some(pos) = size_str.find('x') {
+                        let width_str = &size_str[..pos];
+                        let height_str = &size_str[pos + 1..];
+
+                        let width = width_str.trim().parse::<u32>().ok();
+                        let height = height_str.trim().parse::<u32>().ok();
+
+                        if let (Some(w), Some(h)) = (width, height) {
+                            *override_res = Some((w, h));
+                            info!("渲染分辨率: {}x{}", w, h);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// 执行 ADB shell 命令
@@ -54,54 +143,105 @@ impl ScrcpyDeviceWrapper {
 
     /// 解析屏幕尺寸
     fn parse_screen_size(&self, output: &str) -> Result<(u32, u32), AppError> {
-        // 格式: "Physical size: 1080x2400" 或 "1080x2400"
-        let parts: Vec<&str> = output
-            .split('x')
-            .map(|s| s.trim())
-            .collect();
+        debug!("解析屏幕尺寸输出: {}", output);
 
-        if parts.len() >= 2 {
-            let width_str = parts
-                .last()
-                .unwrap_or(&"0")
-                .trim()
-                .trim_end_matches(|c: char| !c.is_ascii_digit());
-            let height_str = parts
-                .first()
-                .unwrap_or(&"0")
-                .trim()
-                .trim_end_matches(|c: char| !c.is_ascii_digit());
+        // 优先查找 "Physical size:" 行
+        // 格式示例：
+        // "Physical size: 1440x3200"
+        // "Override size: 1080x2400"
+        for line in output.lines() {
+            if line.contains("Physical size:") {
+                // 提取 "Physical size: 1440x3200" 中的尺寸部分
+                if let Some(size_part) = line.split("Physical size:").nth(1) {
+                    let size_str = size_part.trim();
+                    debug!("找到 Physical size 行，尺寸部分: '{}'", size_str);
 
-            let width = width_str
-                .parse::<u32>()
-                .unwrap_or(0);
-            let height = height_str
-                .parse::<u32>()
-                .unwrap_or(0);
+                    if let Some(pos) = size_str.find('x') {
+                        let width_str = &size_str[..pos];
+                        let height_str = &size_str[pos + 1..];
 
-            if width > 0 && height > 0 {
-                return Ok((height, width)); // 注意：ADB 返回的是 WIDTHxHEIGHT
+                        let width = width_str
+                            .trim()
+                            .trim_end_matches(|c: char| !c.is_ascii_digit())
+                            .parse::<u32>()
+                            .unwrap_or(0);
+                        let height = height_str
+                            .trim()
+                            .trim_end_matches(|c: char| !c.is_ascii_digit())
+                            .parse::<u32>()
+                            .unwrap_or(0);
+
+                        debug!("解析结果: width={}, height={}", width, height);
+
+                        if width > 0 && height > 0 {
+                            return Ok((width, height));
+                        }
+                    }
+                }
             }
         }
 
-        // 尝试另一种解析方式
-        if let Some(pos) = output.find('x') {
-            let before = &output[..pos];
-            let after = &output[pos + 1..];
+        // 如果没找到 "Physical size:"，尝试查找 "Override size:" 行（作为备用）
+        for line in output.lines() {
+            if line.contains("Override size:") {
+                if let Some(size_part) = line.split("Override size:").nth(1) {
+                    let size_str = size_part.trim();
+                    debug!("找到 Override size 行，尺寸部分: '{}'", size_str);
 
-            let width = before
-                .trim()
-                .trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse::<u32>()
-                .unwrap_or(0);
-            let height = after
-                .trim()
-                .trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse::<u32>()
-                .unwrap_or(0);
+                    if let Some(pos) = size_str.find('x') {
+                        let width_str = &size_str[..pos];
+                        let height_str = &size_str[pos + 1..];
 
-            if width > 0 && height > 0 {
-                return Ok((width, height));
+                        let width = width_str
+                            .trim()
+                            .trim_end_matches(|c: char| !c.is_ascii_digit())
+                            .parse::<u32>()
+                            .unwrap_or(0);
+                        let height = height_str
+                            .trim()
+                            .trim_end_matches(|c: char| !c.is_ascii_digit())
+                            .parse::<u32>()
+                            .unwrap_or(0);
+
+                        debug!("解析结果: width={}, height={}", width, height);
+
+                        if width > 0 && height > 0 {
+                            return Ok((width, height));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 最后尝试直接解析 "WIDTHxHEIGHT" 格式
+        for line in output.lines() {
+            if let Some(pos) = line.find('x') {
+                let before = &line[..pos];
+                let after = &line[pos + 1..];
+
+                // 只提取数字部分
+                let width = before
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>()
+                    .parse::<u32>()
+                    .unwrap_or(0);
+                let height = after
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse::<u32>()
+                    .unwrap_or(0);
+
+                debug!("备用解析: width={}, height={}", width, height);
+
+                if width > 0 && height > 0 {
+                    return Ok((width, height));
+                }
             }
         }
 
@@ -163,12 +303,32 @@ impl Device for ScrcpyDeviceWrapper {
     async fn screen_size(&self) -> Result<(u32, u32), AppError> {
         debug!("获取屏幕尺寸: {}", self.serial);
 
-        let output = self.adb_shell("wm size").await?;
-        self.parse_screen_size(&output)
+        // 刷新分辨率信息（确保是最新的）
+        let _ = self.refresh_resolution().await;
+
+        // 返回 Override resolution（渲染分辨率），这是 LLM 和应用看到的逻辑分辨率
+        let override_res = self.override_resolution.read().await;
+
+        if let Some((w, h)) = *override_res {
+            debug!("返回渲染分辨率: {}x{}", w, h);
+            Ok((w, h))
+        } else {
+            // 如果没有 override resolution，回退到 physical resolution
+            let physical = self.physical_resolution.read().await;
+            if let Some((w, h)) = *physical {
+                debug!("没有渲染分辨率，返回物理分辨率: {}x{}", w, h);
+                Ok((w, h))
+            } else {
+                Err(AppError::AdbError("无法获取屏幕分辨率".to_string()))
+            }
+        }
     }
 
     async fn tap(&self, x: u32, y: u32) -> Result<(), AppError> {
         debug!("执行点击: ({}, {})", x, y);
+
+        // 转换坐标：从逻辑坐标转换为物理坐标
+        let (physical_x, physical_y) = self.convert_to_physical_coords(x, y).await?;
 
         let output = tokio::process::Command::new("adb")
             .args([
@@ -177,8 +337,8 @@ impl Device for ScrcpyDeviceWrapper {
                 "shell",
                 "input",
                 "tap",
-                &x.to_string(),
-                &y.to_string(),
+                &physical_x.to_string(),
+                &physical_y.to_string(),
             ])
             .output()
             .await
@@ -204,6 +364,10 @@ impl Device for ScrcpyDeviceWrapper {
             start_x, start_y, end_x, end_y, duration_ms
         );
 
+        // 转换坐标：从逻辑坐标转换为物理坐标
+        let (phys_start_x, phys_start_y) = self.convert_to_physical_coords(start_x, start_y).await?;
+        let (phys_end_x, phys_end_y) = self.convert_to_physical_coords(end_x, end_y).await?;
+
         let output = tokio::process::Command::new("adb")
             .args([
                 "-s",
@@ -211,10 +375,10 @@ impl Device for ScrcpyDeviceWrapper {
                 "shell",
                 "input",
                 "swipe",
-                &start_x.to_string(),
-                &start_y.to_string(),
-                &end_x.to_string(),
-                &end_y.to_string(),
+                &phys_start_x.to_string(),
+                &phys_start_y.to_string(),
+                &phys_end_x.to_string(),
+                &phys_end_y.to_string(),
                 &duration_ms.to_string(),
             ])
             .output()

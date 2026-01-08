@@ -73,52 +73,62 @@ impl OpenAIClient {
 
 #[async_trait]
 impl ModelClient for OpenAIClient {
-    async fn query(
+
+    async fn query_with_messages(
         &self,
-        prompt: &str,
+        messages: Vec<crate::agent::core::traits::ChatMessage>,
         screenshot: Option<&str>,
     ) -> Result<ModelResponse, ModelError> {
-        debug!("查询 LLM，提示词长度: {}", prompt.len());
+        debug!("查询 LLM，消息数量: {}", messages.len());
 
-        // 构建消息
-        let mut messages = vec![];
+        // 转换消息格式
+        let mut api_messages = vec![];
 
-        // 添加系统提示
-        messages.push(crate::agent::llm::types::ChatMessage {
-            role: crate::agent::llm::types::MessageRole::System,
-            content: crate::agent::llm::types::MessageContent::Text(
-                "你是一个手机自动化助手。根据用户任务和当前屏幕截图，决定下一步要执行的操作。"
-                    .to_string(),
-            ),
+        // 找到最后一条用户消息的索引（用于添加截图）
+        let last_user_msg_index = messages.iter().rposition(|msg| {
+            matches!(msg.role, crate::agent::core::traits::MessageRole::User)
         });
 
-        // 添加用户消息（可能包含图片）
-        let user_content = if let Some(screenshot) = screenshot {
-            crate::agent::llm::types::MessageContent::Multimodal(vec![
-                crate::agent::llm::types::ContentBlock {
-                    block_type: "image_url".to_string(),
-                    text: None,
-                    image_url: Some(crate::agent::llm::types::ImageUrl::from_base64(screenshot)),
-                },
-                crate::agent::llm::types::ContentBlock {
-                    block_type: "text".to_string(),
-                    text: Some(prompt.to_string()),
-                    image_url: None,
-                },
-            ])
-        } else {
-            crate::agent::llm::types::MessageContent::Text(prompt.to_string())
-        };
+        for (idx, msg) in messages.iter().enumerate() {
+            let role = match msg.role {
+                crate::agent::core::traits::MessageRole::System => {
+                    crate::agent::llm::types::MessageRole::System
+                }
+                crate::agent::core::traits::MessageRole::User => {
+                    crate::agent::llm::types::MessageRole::User
+                }
+                crate::agent::core::traits::MessageRole::Assistant => {
+                    crate::agent::llm::types::MessageRole::Assistant
+                }
+            };
 
-        messages.push(crate::agent::llm::types::ChatMessage {
-            role: crate::agent::llm::types::MessageRole::User,
-            content: user_content,
-        });
+            // 只在最后一条用户消息中添加截图
+            let is_last_user_msg = last_user_msg_index == Some(idx);
+
+            let content = if is_last_user_msg && screenshot.is_some() {
+                crate::agent::llm::types::MessageContent::Multimodal(vec![
+                    crate::agent::llm::types::ContentBlock {
+                        block_type: "image_url".to_string(),
+                        text: None,
+                        image_url: Some(crate::agent::llm::types::ImageUrl::from_base64(screenshot.unwrap())),
+                    },
+                    crate::agent::llm::types::ContentBlock {
+                        block_type: "text".to_string(),
+                        text: Some(msg.content.clone()),
+                        image_url: None,
+                    },
+                ])
+            } else {
+                crate::agent::llm::types::MessageContent::Text(msg.content.clone())
+            };
+
+            api_messages.push(crate::agent::llm::types::ChatMessage { role, content });
+        }
 
         // 构建请求
         let request = ChatRequest {
             model: self.config.model_name.clone(),
-            messages,
+            messages: api_messages,
             max_tokens: Some(self.config.max_tokens),
             temperature: Some(self.config.temperature),
             top_p: Some(self.config.top_p),
@@ -150,7 +160,7 @@ impl ModelClient for OpenAIClient {
         Ok(ModelResponse {
             content: content.clone(),
             action,
-            confidence: 0.8, // 可以从响应中解析
+            confidence: 0.8,
             reasoning: None,
             tokens_used: usage.total_tokens,
         })
