@@ -414,7 +414,7 @@ async fn start_scrcpy_session(state: Arc<ScrcpySessionState>, client_socket_id: 
 
         // 先将 jar 文件写入临时文件
         let temp_jar_path = format!("/tmp/scrcpy-server-{}.jar", client_socket_id_jar);
-        if let Err(e) = std::fs::write(&temp_jar_path, &jar_data) {
+        if let Err(e) = tokio::fs::write(&temp_jar_path, &jar_data).await {
             logger_jar.error(&format!("写入临时 jar 文件失败: {:?}", e));
             return;
         }

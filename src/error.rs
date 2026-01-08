@@ -35,4 +35,16 @@ pub enum AppError {
     /// 未知错误
     #[error("未知错误: {0}")]
     Unknown(String),
+
+    /// Agent 错误
+    #[error("Agent 错误: {0}")]
+    AgentError(#[from] crate::agent::core::traits::AgentError),
+
+    /// Model 错误
+    #[error("Model 错误: {0}")]
+    ModelError(#[from] crate::agent::core::traits::ModelError),
+
+    /// Action 错误
+    #[error("Action 错误: {0}")]
+    ActionError(#[from] crate::agent::core::traits::ActionError),
 }

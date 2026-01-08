@@ -1,7 +1,10 @@
 use adb_client::server::ADBServer;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use crate::scrcpy::scrcpy::ScrcpyConnect;
+use crate::agent::core::agent_group::AgentGroup;
+use crate::agent::pool::DevicePool;
 
 /// Scrcpy 服务器，负责管理设备连接和屏幕镜像
 pub struct ScrcpyServer {
@@ -47,13 +50,17 @@ impl Default for ScrcpyServer {
 /// Context trait，定义获取服务器实例的接口
 pub trait IContext: Send + Sync {
     fn get_scrcpy(&self) -> &RwLock<ScrcpyServer>;
-    fn get_adb_server(&self) -> &RwLock<ADBServer>;
+    fn get_adb_server(&self) -> &Arc<RwLock<ADBServer>>;
+    fn get_agent_group(&self) -> &RwLock<Option<Arc<AgentGroup>>>;
+    fn get_device_pool(&self) -> &RwLock<Option<Arc<DevicePool>>>;
 }
 
 /// 线程安全的 Context，管理 ScrcpyServer 和 ADBServer
 pub struct Context {
     scrcpy: RwLock<ScrcpyServer>,
-    adb_server: RwLock<ADBServer>,
+    adb_server: Arc<RwLock<ADBServer>>,
+    agent_group: RwLock<Option<Arc<AgentGroup>>>,
+    device_pool: RwLock<Option<Arc<DevicePool>>>,
 }
 
 impl Context {
@@ -61,8 +68,20 @@ impl Context {
     pub fn new() -> Self {
         Context {
             scrcpy: RwLock::new(ScrcpyServer::new()),
-            adb_server: RwLock::new(ADBServer::default()),
+            adb_server: Arc::new(RwLock::new(ADBServer::default())),
+            agent_group: RwLock::new(None),
+            device_pool: RwLock::new(None),
         }
+    }
+
+    /// 设置 Agent 组
+    pub async fn set_agent_group(&self, group: Arc<AgentGroup>) {
+        *self.agent_group.write().await = Some(group);
+    }
+
+    /// 设置设备池
+    pub async fn set_device_pool(&self, pool: Arc<DevicePool>) {
+        *self.device_pool.write().await = Some(pool);
     }
 }
 
@@ -71,7 +90,15 @@ impl IContext for Context {
         &self.scrcpy
     }
 
-    fn get_adb_server(&self) -> &RwLock<ADBServer> {
+    fn get_adb_server(&self) -> &Arc<RwLock<ADBServer>> {
         &self.adb_server
+    }
+
+    fn get_agent_group(&self) -> &RwLock<Option<Arc<AgentGroup>>> {
+        &self.agent_group
+    }
+
+    fn get_device_pool(&self) -> &RwLock<Option<Arc<DevicePool>>> {
+        &self.device_pool
     }
 }

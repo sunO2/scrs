@@ -16,12 +16,25 @@ thiserror = "2.0.7"
 socketioxide = "0.18"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = "0.1"
 
 ### 文件内嵌
 rust-embed = "8"
 base64 = "0.22.1"
 bytes = "1.9"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+### Agent 相关依赖
+async-trait = "0.1"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+tokio-stream = "0.1"
+futures = "0.3"
+anyhow = "1.0"
+regex = "1.10"
+image = "0.25"
+toml = "0.9"
 
 
 [profile.release]

@@ -823,17 +823,29 @@
 
         <!-- Right: Chat Area -->
         <div class="panel-right">
-            <h2>对话区域</h2>
+            <h2>
+                对话区域
+                <span class="status-indicators">
+                    <span id="agentStatusDot" class="status-dot disconnected" title="Agent 状态"></span>
+                </span>
+            </h2>
+
+            <!-- Agent 控制按钮 -->
+            <div style="display: flex; gap: 8px; margin-bottom: 15px;">
+                <button id="refreshDevicesAgentBtn" class="secondary" style="flex: 1; margin-bottom: 0;">刷新设备</button>
+                <button id="stopAgentBtn" class="secondary" style="flex: 1; margin-bottom: 0;">停止 Agent</button>
+            </div>
+
             <div class="chat-panel-full">
                 <div class="chat-messages" id="chatMessages">
                     <div class="chat-message system">
                         <div class="time">系统</div>
-                        <div class="content">欢迎使用对话区域</div>
+                        <div class="content">欢迎使用对话区域。连接到 Agent 服务器后，输入消息将作为任务发送给 Agent 执行。</div>
                     </div>
                 </div>
                 <div class="chat-input-area">
                     <div class="chat-input-wrapper">
-                        <textarea id="chatInput" placeholder="输入消息..."></textarea>
+                        <textarea id="chatInput" placeholder="输入任务指令，例如：打开微信、发送消息等..."></textarea>
                         <button id="sendChatBtn" class="chat-send-btn"></button>
                     </div>
                 </div>
@@ -1275,6 +1287,108 @@
             log('日志已清空', 'info');
         });
 
+        // ========== Socket.IO Agent 连接 ==========
+        let agentSocket = null;
+        let agentConnected = false;
+
+        function updateAgentStatusDot(connected) {
+            const dot = document.getElementById('agentStatusDot');
+            if (connected) {
+                dot.classList.remove('disconnected');
+                dot.classList.add('connected');
+            } else {
+                dot.classList.remove('connected');
+                dot.classList.add('disconnected');
+            }
+        }
+
+        function connectToAgentSocket() {
+            try {
+                log('连接到 Agent Socket.IO 服务器 (端口 4000)...', 'info');
+
+                // 如果已经连接，先断开
+                if (agentSocket) {
+                    agentSocket.disconnect();
+                }
+
+                // 连接到端口 4000 的 Agent Socket.IO 服务器
+                agentSocket = io('http://localhost:4000', {
+                    transports: ['websocket', 'polling'],
+                    reconnection: true,
+                    reconnectionAttempts: 5,
+                    reconnectionDelay: 1000
+                });
+
+                // 连接成功
+                agentSocket.on('connect', () => {
+                    log('Agent Socket.IO 已连接', 'success');
+                    agentConnected = true;
+                    updateAgentStatusDot(true);
+                    addChatMessage('已连接到 Agent 服务器', 'system');
+                });
+
+                // 连接错误
+                agentSocket.on('connect_error', (error) => {
+                    log(`Agent Socket.IO 连接错误: ${error.message}`, 'error');
+                    agentConnected = false;
+                    updateAgentStatusDot(false);
+                });
+
+                // 断开连接
+                agentSocket.on('disconnect', (reason) => {
+                    log(`Agent Socket.IO 已断开: ${reason}`, 'warn');
+                    agentConnected = false;
+                    updateAgentStatusDot(false);
+                    addChatMessage('与 Agent 服务器断开连接', 'system');
+                });
+
+                // 监听 agent/start 响应
+                agentSocket.on('agent/start/response', (data) => {
+                    log(`Agent 启动响应: ${JSON.stringify(data)}`, 'info');
+                    if (data.success) {
+                        addChatMessage(`✓ Agent 启动成功 (ID: ${data.agent_id})`, 'system');
+                    } else {
+                        addChatMessage(`✗ Agent 启动失败: ${data.error || '未知错误'}`, 'system');
+                    }
+                });
+
+                // 监听 agent/stop 响应
+                agentSocket.on('agent/stop/response', (data) => {
+                    log(`Agent 停止响应: ${JSON.stringify(data)}`, 'info');
+                    if (data.success) {
+                        addChatMessage('✓ Agent 已停止', 'system');
+                    } else {
+                        addChatMessage(`✗ Agent 停止失败: ${data.error || '未知错误'}`, 'system');
+                    }
+                });
+
+                // 监听设备列表响应
+                agentSocket.on('agent/devices/response', (data) => {
+                    log(`设备列表: ${JSON.stringify(data)}`, 'info');
+                    if (data.success && data.devices) {
+                        if (data.devices.length > 0) {
+                            const deviceList = data.devices.map(d => `${d.serial} (${d.status})`).join('\n');
+                            addChatMessage(`可用设备:\n${deviceList}`, 'system');
+                        } else {
+                            addChatMessage('暂无可用设备', 'system');
+                        }
+                    } else {
+                        addChatMessage('获取设备列表失败', 'system');
+                    }
+                });
+
+                // 监听 Agent 状态更新（如果有）
+                agentSocket.on('agent/status', (data) => {
+                    log(`Agent 状态更新: ${JSON.stringify(data)}`, 'info');
+                    addChatMessage(`Agent 状态: ${data.status}`, 'system');
+                });
+
+            } catch (error) {
+                log(`连接 Agent Socket.IO 失败: ${error.message}`, 'error');
+                updateAgentStatusDot(false);
+            }
+        }
+
         // ========== 对话区域功能 ==========
         function addChatMessage(content, type = 'user') {
             const chatMessages = document.getElementById('chatMessages');
@@ -1300,18 +1414,54 @@
             // 添加用户消息
             addChatMessage(message, 'user');
 
-            // TODO: 这里可以通过 Socket.IO 发送消息到服务器
-            // if (client && client.isConnected()) {
-            //     client.sendChatMessage(message);
-            // }
+            // 如果连接了 Agent Socket.IO，发送消息
+            if (agentSocket && agentConnected) {
+                const deviceSerial = document.getElementById('deviceSelect').value;
+
+                if (!deviceSerial) {
+                    addChatMessage('请先选择设备', 'system');
+                    return;
+                }
+
+                // 发送 agent/start 请求
+                agentSocket.emit('agent/start', {
+                    device_serial: deviceSerial,
+                    task: message
+                });
+
+                log(`发送 Agent 任务: ${message}`, 'info');
+            } else {
+                addChatMessage('未连接到 Agent 服务器', 'system');
+                log('Agent Socket.IO 未连接，尝试重新连接...', 'warn');
+                connectToAgentSocket();
+            }
 
             // 清空输入框
             chatInput.value = '';
+        }
 
-            // 模拟系统回复（可选）
-            setTimeout(() => {
-                addChatMessage('收到消息: ' + message, 'system');
-            }, 500);
+        function requestDeviceList() {
+            if (agentSocket && agentConnected) {
+                agentSocket.emit('agent/devices', {});
+                log('请求设备列表', 'info');
+            }
+        }
+
+        function stopAgent() {
+            const deviceSerial = document.getElementById('deviceSelect').value;
+            if (!deviceSerial) {
+                addChatMessage('请先选择设备', 'system');
+                return;
+            }
+
+            if (agentSocket && agentConnected) {
+                agentSocket.emit('agent/stop', {
+                    device_serial: deviceSerial
+                });
+                log(`停止 Agent: ${deviceSerial}`, 'info');
+            } else {
+                addChatMessage('未连接到 Agent 服务器', 'system');
+            }
         }
 
         // 发送按钮点击事件
@@ -1324,6 +1474,10 @@
                 sendChatMessage();
             }
         });
+
+        // Agent 控制按钮
+        document.getElementById('refreshDevicesAgentBtn').addEventListener('click', requestDeviceList);
+        document.getElementById('stopAgentBtn').addEventListener('click', stopAgent);
 
         // ========== 窗口大小改变时重新计算显示尺寸 ==========
         let currentVideoSize = null;
@@ -1358,6 +1512,9 @@
 
             // 自动获取设备列表
             fetchDevices();
+
+            // 连接到 Agent Socket.IO 服务器
+            connectToAgentSocket();
 
             log('初始化完成', 'success');
         });

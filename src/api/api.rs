@@ -90,7 +90,7 @@ impl ApiServer {
         debug!("收到获取设备列表请求");
         
         // 通过 ADBServer 获取当前连接的设备
-        let mut adb_server = ctx.get_adb_server().write().unwrap();
+        let mut adb_server = ctx.get_adb_server().write().await;
         let adb_devices: Result<Vec<adb_client::server::DeviceShort>, adb_client::RustADBError> = adb_server.devices();
 
         let devices: Vec<DeviceInfo> = match adb_devices {
@@ -124,7 +124,7 @@ impl ApiServer {
 
         // 优先检查设备是否已连接
         {
-            let scrcpy_read = ctx.get_scrcpy().read().unwrap();
+            let scrcpy_read = ctx.get_scrcpy().read().await;
             if scrcpy_read.is_device_connected(&req.serial) {
                 info!("设备 {} 已经连接，返回现有连接信息", req.serial);
                 if let Some(connect) = scrcpy_read.get_device_connect(&req.serial) {
@@ -144,8 +144,8 @@ impl ApiServer {
         }
         // 释放读锁
 
-        let mut scrcpy: std::sync::RwLockWriteGuard<'_, crate::context::context::ScrcpyServer> = ctx.get_scrcpy().write().unwrap();
-        let mut adb = ctx.get_adb_server().write().unwrap();
+        let mut scrcpy = ctx.get_scrcpy().write().await;
+        let mut adb = ctx.get_adb_server().write().await;
         let device = adb.get_device_by_name(&req.serial).unwrap();
 
          // 动态分配可用端口
@@ -190,7 +190,7 @@ impl ApiServer {
         Json(req): Json<ConnectDeviceRequest>,
     ) -> (StatusCode, Json<ApiResponse<String>>) {
         debug!("收到断开设备请求: {}", req.serial);
-        let mut scrcpy = ctx.get_scrcpy().write().unwrap();
+        let mut scrcpy = ctx.get_scrcpy().write().await;
         
         if !scrcpy.is_device_connected(&req.serial) {
             warn!("设备 {} 未连接", req.serial);
@@ -223,7 +223,7 @@ impl ApiServer {
         axum::extract::Path(serial): axum::extract::Path<String>,
     ) -> (StatusCode, Json<ApiResponse<DeviceInfo>>) {
         debug!("收到获取设备状态请求: {}", serial);
-        let scrcpy = ctx.get_scrcpy().read().unwrap();
+        let scrcpy = ctx.get_scrcpy().read().await;
         
         match scrcpy.get_device_connect(&serial) {
             Some(_connect) => {
