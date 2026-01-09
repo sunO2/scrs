@@ -10,6 +10,7 @@ use super::swipe::SwipeAction;
 use super::swipe::ScrollAction;
 use super::input::TypeAction;
 use super::input::PressKeyAction;
+use super::input::KeyCode;
 use super::navigation::BackAction;
 use super::navigation::HomeAction;
 use super::navigation::RecentAction;
@@ -37,6 +38,338 @@ pub enum ActionEnum {
     Wait(WaitAction),
     Screenshot(ScreenshotAction),
     Finish(FinishAction),
+}
+
+impl ActionEnum {
+    /// 解析 LLM 响应中的操作
+    /// 支持两种格式：
+    /// 1. `finish(...)` - 任务完成，括号内是消息
+    /// 2. `do(...)` - 执行操作，括号内是 `action="...", key=value` 格式
+    pub fn parse_from_response(content: &str) -> (Option<String>, Option<Self>) {
+        use regex::Regex;
+        use tracing::{debug, info, warn};
+
+        // 提取 <thinking> 标签内容
+        let thinking_re = Regex::new(r"<thinking>([^<]*)</thinking>").unwrap();
+        let thinking = thinking_re.captures(content)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().trim().to_string());
+
+        if let Some(ref t) = thinking {
+            debug!("💭 thinking 部分: {}", t);
+        } else {
+            debug!("💭 未找到 <thinking> 标签");
+        }
+
+        // 规则 1: 检查 finish(...)
+        // 手动查找匹配的括号，支持多行内容
+        debug!("🔍 检查 finish(...) 模式");
+        if let Some(start_pos) = content.find("finish(") {
+            let mut bracket_count = 0;
+            let mut in_brackets = false;
+            let mut end_pos = start_pos + 6; // 跳过 "finish"
+
+            for (i, c) in content[start_pos + 6..].char_indices() {
+                let actual_i = start_pos + 6 + i;
+                if c == '(' {
+                    bracket_count += 1;
+                    in_brackets = true;
+                } else if c == ')' {
+                    bracket_count -= 1;
+                    if bracket_count == 0 && in_brackets {
+                        end_pos = actual_i;
+                        break;
+                    }
+                }
+            }
+
+            if end_pos > start_pos + 6 {
+                let message = content[start_pos + 7..end_pos].trim();
+                debug!("✅ 匹配到 finish(...) 模式");
+                debug!("💬 message 部分: {}", message);
+
+                // 移除可能的 message= 前缀和引号
+                let message = message
+                    .strip_prefix("message=")
+                    .unwrap_or(message)
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string();
+
+                info!("✅ 解析成功: finish action with message='{}'", message);
+                return (thinking, Some(ActionEnum::Finish(FinishAction {
+                    result: message,
+                    success: true,
+                })));
+            }
+        }
+
+        // 规则 2: 检查 do(...)
+        // 手动查找匹配的括号，避免正则表达式的问题
+        debug!("🔍 检查 do(...) 模式");
+        if let Some(start_pos) = content.find("do(") {
+            let mut bracket_count = 0;
+            let mut in_brackets = false;
+            let mut end_pos = start_pos + 2; // 跳过 "do"
+
+            for (i, c) in content[start_pos + 2..].char_indices() {
+                let actual_i = start_pos + 2 + i;
+                if c == '(' {
+                    bracket_count += 1;
+                    in_brackets = true;
+                } else if c == ')' {
+                    bracket_count -= 1;
+                    if bracket_count == 0 && in_brackets {
+                        end_pos = actual_i;
+                        break;
+                    }
+                }
+            }
+
+            if end_pos > start_pos + 2 {
+                let params_str = content[start_pos + 3..end_pos].trim();
+                debug!("✅ 匹配到 do(...) 模式");
+                debug!("🔧 参数字符串: {}", params_str);
+
+                // 解析参数
+                match Self::parse_do_params(params_str) {
+                    Some(action) => {
+                        info!("✅ 解析成功: {} action", action.action_type());
+                        return (thinking, Some(action));
+                    }
+                    None => {
+                        warn!("⚠️  do(...) 参数解析失败: {}", params_str);
+                    }
+                }
+            }
+        }
+
+        warn!("❌ 无法解析响应内容，没有匹配到 finish() 或 do() 模式");
+        // 如果没有找到匹配，返回 None
+        (thinking, None)
+    }
+
+    /// 解析 do() 括号内的参数
+    /// 支持格式：
+    /// - action="Tap", element=[x,y]
+    /// - action="Type", text="hello"
+    /// - action="Back"
+    fn parse_do_params(params_str: &str) -> Option<Self> {
+        use regex::Regex;
+        use tracing::{debug, info};
+
+        debug!("🔧 开始解析 do() 参数: {}", params_str);
+
+        // 提取 action 类型
+        let action_re = Regex::new(r#"action\s*=\s*"([^"]+)""#).unwrap();
+        let action_type = if let Some(cap) = action_re.captures(params_str) {
+            let action = cap.get(1).unwrap().as_str();
+            debug!("✅ 提取 action 类型: {}", action);
+            action
+        } else {
+            debug!("❌ 未找到 action 类型");
+            // 如果没有 action=，直接返回 None
+            return None;
+        };
+
+        // 构建参数 JSON
+        let mut params = serde_json::Map::new();
+
+        // 匹配 key="value" 格式
+        let kv_re = Regex::new(r#"(\w+)\s*=\s*"([^"]*)""#).unwrap();
+        for cap in kv_re.captures_iter(params_str) {
+            let key = cap.get(1).unwrap().as_str();
+            let value = cap.get(2).unwrap().as_str();
+            // 跳过 action 字段
+            if key != "action" {
+                debug!("  📌 参数: {} = {}", key, value);
+                params.insert(key.to_string(), serde_json::json!(value));
+            }
+        }
+
+        // 匹配 key=[...] 格式（数组）
+        let array_re = Regex::new(r#"(\w+)\s*=\s*\[([^\]]+)\]"#).unwrap();
+        for cap in array_re.captures_iter(params_str) {
+            let key = cap.get(1).unwrap().as_str();
+            let values_str = cap.get(2).unwrap().as_str();
+            let values: Vec<u32> = values_str
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            if !values.is_empty() && key != "action" {
+                debug!("  📌 参数: {} = {:?}", key, values);
+                params.insert(key.to_string(), serde_json::json!(values));
+            }
+        }
+
+        // 匹配 key=value 格式（无引号，用于数字）
+        let num_re = Regex::new(r#"(\w+)\s*=\s*(\d+)"#).unwrap();
+        for cap in num_re.captures_iter(params_str) {
+            let key = cap.get(1).unwrap().as_str();
+            let value = cap.get(2).unwrap().as_str();
+            if key != "action" && !params.contains_key(key) {
+                debug!("  📌 参数: {} = {} (数字)", key, value);
+                params.insert(key.to_string(), serde_json::json!(value));
+            }
+        }
+
+        debug!("📊 解析后的参数: {:?}", params);
+
+        // 使用 ParsedAction 转换
+        let parsed = crate::agent::core::traits::ParsedAction {
+            action_type: action_type.to_string(),
+            parameters: serde_json::Value::Object(params),
+            reasoning: params_str.to_string(),
+        };
+
+        info!("🔄 转换 ParsedAction: action_type={}", parsed.action_type);
+        let result = Self::from_parsed(parsed);
+
+        if result.is_some() {
+            info!("✅ 成功创建 ActionEnum");
+        } else {
+            info!("❌ 无法创建 ActionEnum (from_parsed 返回 None)");
+        }
+
+        result
+    }
+
+    /// 从 ParsedAction 创建 ActionEnum
+    fn from_parsed(parsed: crate::agent::core::traits::ParsedAction) -> Option<Self> {
+        use tracing::debug;
+
+        debug!("🎯 from_parsed: 处理 action_type='{}'", parsed.action_type);
+        debug!("   参数: {:?}", parsed.parameters);
+
+        match parsed.action_type.to_lowercase().as_str() {
+            "tap" => {
+                // 尝试从 element 或 x,y 获取坐标
+                if let Some(element) = parsed.parameters.get("element") {
+                    if let Some(coords) = element.as_array() {
+                        if coords.len() >= 2 {
+                            let x = coords[0].as_u64()? as u32;
+                            let y = coords[1].as_u64()? as u32;
+                            return Some(ActionEnum::Tap(TapAction { x, y, description: None }));
+                        }
+                    }
+                }
+                // 尝试从 x, y 字段获取
+                if let (Some(x), Some(y)) = (
+                    parsed.parameters.get("x").and_then(|v| v.as_u64()).map(|v| v as u32),
+                    parsed.parameters.get("y").and_then(|v| v.as_u64()).map(|v| v as u32),
+                ) {
+                    return Some(ActionEnum::Tap(TapAction { x, y, description: None }));
+                }
+                None
+            }
+            "long_press" => {
+                if let Some(element) = parsed.parameters.get("element") {
+                    if let Some(coords) = element.as_array() {
+                        if coords.len() >= 2 {
+                            let x = coords[0].as_u64()? as u32;
+                            let y = coords[1].as_u64()? as u32;
+                            let duration_ms = parsed.parameters.get("duration_ms")
+                                .and_then(|v| v.as_u64()).map(|v| v as u32)
+                                .unwrap_or(1000);
+                            return Some(ActionEnum::LongPress(LongPressAction { x, y, duration_ms, description: None }));
+                        }
+                    }
+                }
+                None
+            }
+            "double_tap" => {
+                if let Some(element) = parsed.parameters.get("element") {
+                    if let Some(coords) = element.as_array() {
+                        if coords.len() >= 2 {
+                            let x = coords[0].as_u64()? as u32;
+                            let y = coords[1].as_u64()? as u32;
+                            return Some(ActionEnum::DoubleTap(DoubleTapAction { x, y, description: None }));
+                        }
+                    }
+                }
+                None
+            }
+            "swipe" => {
+                if let (Some(start), Some(end)) = (
+                    parsed.parameters.get("start").and_then(|v| v.as_array()),
+                    parsed.parameters.get("end").and_then(|v| v.as_array()),
+                ) {
+                    if start.len() >= 2 && end.len() >= 2 {
+                        let start_x = start[0].as_u64()? as u32;
+                        let start_y = start[1].as_u64()? as u32;
+                        let end_x = end[0].as_u64()? as u32;
+                        let end_y = end[1].as_u64()? as u32;
+                        let duration_ms = parsed.parameters.get("duration_ms")
+                            .and_then(|v| v.as_u64()).map(|v| v as u32)
+                            .unwrap_or(500);
+                        return Some(ActionEnum::Swipe(SwipeAction { start_x, start_y, end_x, end_y, duration_ms, description: None }));
+                    }
+                }
+                None
+            }
+            "type" => {
+                if let Some(text) = parsed.parameters.get("text").and_then(|v| v.as_str()) {
+                    return Some(ActionEnum::Type(TypeAction { text: text.to_string(), description: None }));
+                }
+                None
+            }
+            "press_key" => {
+                if let Some(keycode) = parsed.parameters.get("keycode").and_then(|v| v.as_u64()) {
+                    let key_code = match keycode as u32 {
+                        3 => KeyCode::Home,
+                        4 => KeyCode::Back,
+                        66 => KeyCode::Enter,
+                        111 => KeyCode::Escape,
+                        67 => KeyCode::Delete,
+                        61 => KeyCode::Tab,
+                        24 => KeyCode::VolumeUp,
+                        25 => KeyCode::VolumeDown,
+                        26 => KeyCode::Power,
+                        27 => KeyCode::Camera,
+                        _ => KeyCode::Back,
+                    };
+                    return Some(ActionEnum::PressKey(PressKeyAction { keycode: key_code, description: None }));
+                }
+                None
+            }
+            "back" => Some(ActionEnum::Back(BackAction { description: None })),
+            "home" => Some(ActionEnum::Home(HomeAction { description: None })),
+            "recent" => Some(ActionEnum::Recent(RecentAction { description: None })),
+            "notification" => Some(ActionEnum::Notification(NotificationAction { description: None })),
+            "launch" => {
+                if let Some(app) = parsed.parameters.get("app").and_then(|v| v.as_str())
+                    .or_else(|| parsed.parameters.get("app_name").and_then(|v| v.as_str())) {
+                    return Some(ActionEnum::Launch(LaunchAction {
+                        package: app.to_string(),
+                        activity: None,
+                        description: None,
+                    }));
+                }
+                None
+            }
+            "wait" => {
+                let duration_ms = parsed.parameters.get("duration_ms")
+                    .and_then(|v| v.as_u64()).map(|v| v as u32)
+                    .or_else(|| parsed.parameters.get("duration").and_then(|v| v.as_u64()).map(|v| v as u32 * 1000))
+                    .unwrap_or(1000);
+                let message = parsed.parameters.get("message").and_then(|v| v.as_str()).map(|s| s.to_string());
+                return Some(ActionEnum::Wait(WaitAction { duration_ms, reason: message }));
+            }
+            "screenshot" => Some(ActionEnum::Screenshot(ScreenshotAction { description: None })),
+            "finish" => {
+                let result = parsed.parameters.get("result")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| parsed.parameters.get("message").and_then(|v| v.as_str()))
+                    .unwrap_or("任务完成");
+                let success = parsed.parameters.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
+                return Some(ActionEnum::Finish(FinishAction {
+                    result: result.to_string(),
+                    success,
+                }));
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Action for ActionEnum {

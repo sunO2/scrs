@@ -57,18 +57,32 @@ impl ActionHandler {
                 .await;
             }
 
+            // 执行前输出 action 详情
+            info!("📋 ActionHandler: 准备执行 action");
+            info!("   Action 类型: {}", action.action_type());
+            info!("   Action 描述: {}", action.description());
+            info!("   Action 详情: {:?}", action);
+            info!("   重试次数: {}/{}", attempt, self.max_retries);
+
             match action.execute(device.as_ref()).await {
                 Ok(result) => {
+                    info!("📊 ActionHandler: 执行结果");
+                    info!("   成功: {}", result.success);
+                    info!("   消息: {}", result.message);
+                    info!("   耗时: {}ms", result.duration_ms);
+
                     if result.success {
-                        debug!("操作成功: {}", action.description());
+                        info!("✅ 操作执行成功");
                         return Ok(result);
                     } else {
-                        warn!("操作失败: {}", result.message);
+                        warn!("❌ 操作执行失败: {}", result.message);
                         last_error = Some(AppError::Unknown(result.message.clone()));
                     }
                 }
                 Err(e) => {
-                    warn!("操作执行出错: {}", e);
+                    warn!("❌ 操作执行出错: {}", e);
+                    warn!("   错误类型: {:?}", std::any::type_name::<AppError>());
+                    warn!("   错误详情: {:?}", e);
                     last_error = Some(e);
                 }
             }
@@ -82,17 +96,9 @@ impl ActionHandler {
     /// 从解析的操作执行
     pub async fn execute_parsed_action(
         &self,
-        parsed: &ParsedAction,
+        action: &ActionEnum,
     ) -> Result<ActionResult, AppError> {
-        debug!("执行解析的操作: {} {:?}", parsed.action_type, parsed.parameters);
-
-        // 转换参数格式以匹配 Action 结构体
-        let params = self.convert_action_params(&parsed.action_type, parsed.parameters.clone())
-            .map_err(|e| AppError::Unknown(format!("参数转换失败: {}", e)))?;
-
-        // 从 JSON 创建 ActionEnum
-        let action = ActionEnum::from_json(&parsed.action_type, params)
-            .map_err(|e| AppError::Unknown(format!("创建 Action 失败: {}", e)))?;
+        debug!("执行解析的操作: {}", action.action_type());
 
         // 验证操作
         action.validate().map_err(|e| {
@@ -100,7 +106,7 @@ impl ActionHandler {
         })?;
 
         // 执行操作
-        self.execute_with_retry(&action).await
+        self.execute_with_retry(action).await
     }
 
     /// 转换 Action 参数格式

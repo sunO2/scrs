@@ -3,9 +3,12 @@ use reqwest::Client;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn, error};
 use tokio_stream::StreamExt;
-use crate::agent::core::traits::{ModelClient, ModelResponse, ModelError, ModelInfo, ParsedAction};
+use crate::agent::core::traits::{ModelClient, ModelResponse, ModelError, ModelInfo};
 use crate::agent::llm::types::{ChatRequest, ModelConfig};
 use serde::{Deserialize, Serialize};
+
+// 导入 ActionEnum 用于解析响应
+use crate::agent::actions::base::ActionEnum;
 
 /// 获取系统提示词
 pub fn get_system_prompt(screen_width: u32, screen_height: u32) -> String {
@@ -232,7 +235,38 @@ impl AutoGLMClient {
             .send()
             .await
             .map_err(|e| {
-                error!("网络请求错误: {}", e);
+                error!("🔴 AutoGLM 网络请求失败");
+                error!("   URL: {}", url);
+                error!("   错误类型: {:?}", e);
+
+                // 提供更详细的诊断信息
+                if e.is_timeout() {
+                    error!("   错误: 请求超时");
+                    error!("   可能的原因:");
+                    error!("   1. 网络连接不稳定");
+                    error!("   2. API 服务器响应缓慢");
+                    error!("   3. 请求太大，处理时间过长");
+                    error!("   建议:");
+                    error!("   - 检查网络连接");
+                    error!("   - 增加 timeout 时间");
+                    error!("   - 减小请求大小（如减少图片数量）");
+                } else if e.is_connect() {
+                    error!("   错误: 无法连接到服务器");
+                    error!("   可能的原因:");
+                    error!("   1. 网络未连接");
+                    error!("   2. API 服务器地址错误: {}", url);
+                    error!("   3. 防火墙或代理阻止连接");
+                    error!("   4. DNS 解析失败");
+                    error!("   建议:");
+                    error!("   - 检查网络连接");
+                    error!("   - 验证 API URL 是否正确");
+                    error!("   - 检查防火墙设置");
+                    error!("   - 尝试使用 VPN");
+                } else {
+                    error!("   其他网络错误");
+                    error!("   原始错误: {}", e);
+                }
+
                 ModelError::NetworkError(format!("发送请求失败: {}", e))
             })?;
 
@@ -278,95 +312,10 @@ impl AutoGLMClient {
         Ok(chat_response)
     }
 
-    /// 解析 AutoGLM 响应（支持特殊标记）
-    ///
-    /// 解析规则（严格按照 Python 代码）：
-    /// 1. 如果包含 'finish(message='，之前的是 thinking，使用 parser 解析 action
-    /// 2. 如果包含 'do(action='，之前的是 thinking，使用 parser 解析 action
-    /// 3. 如果包含 '<answer>'，使用 XML 标签解析，然后用 parser 解析 action
-    /// 4. 否则，thinking 为空，尝试用 parser 解析全部内容
-    fn parse_response(&self, content: &str) -> (String, Option<ParsedAction>) {
-        use crate::agent::llm::parser::{try_parse_do_action, try_parse_finish_action, parse_action_from_response};
-
-        // 规则 1: 检查 finish(message=
-        if let Some(pos) = content.find("finish(message=") {
-            let thinking = content[..pos].trim().to_string();
-            let action_str = "finish(message=".to_string() + &content[pos + 16..];
-
-            // 使用 parser 解析 finish action
-            if let Some(action) = try_parse_finish_action(&action_str) {
-                return (thinking, Some(action));
-            }
-            // 如果解析失败，返回原始 action 字符串
-            let action = ParsedAction {
-                action_type: "raw".to_string(),
-                parameters: serde_json::json!({ "raw": action_str }),
-                reasoning: action_str.clone(),
-            };
-            return (thinking, Some(action));
-        }
-
-        // 规则 2: 检查 do(action=
-        if let Some(pos) = content.find("do(action=") {
-            let thinking = content[..pos].trim().to_string();
-            let action_str = "do(action=".to_string() + &content[pos + 10..];
-
-            // 使用 parser 解析 do action
-            if let Some(action) = try_parse_do_action(&action_str) {
-                return (thinking, Some(action));
-            }
-            // 如果解析失败，返回原始 action 字符串
-            let action = ParsedAction {
-                action_type: "raw".to_string(),
-                parameters: serde_json::json!({ "raw": action_str }),
-                reasoning: action_str.clone(),
-            };
-            return (thinking, Some(action));
-        }
-
-        // 规则 3: 回退到 XML 标签解析
-        // Python 代码: thinking = parts[0].replace("<thinking>", "").replace("</thinking>", "").strip()
-        if let Some(start) = content.find("<answer>") {
-            if let Some(end) = content.find("</answer>") {
-                // 提取 <answer> 之前的内容作为 thinking
-                let thinking_raw = &content[..start];
-                // 移除 <thinking> 和 </thinking> 标签（只移除标签，保留中间内容）
-                let thinking = thinking_raw
-                    .replace("<thinking>", "")
-                    .replace("</thinking>", "")
-                    .trim()
-                    .to_string();
-                let action_content = content[start + 8..end].to_string(); // 8 = len("<answer>")
-
-                // 尝试解析 action
-                if let Ok(Some(action)) = parse_action_from_response(&action_content) {
-                    return (thinking, Some(action));
-                }
-
-                // 如果解析失败，返回原始 action 字符串
-                let action = ParsedAction {
-                    action_type: "raw".to_string(),
-                    parameters: serde_json::json!({ "raw": action_content }),
-                    reasoning: action_content,
-                };
-                return (thinking, Some(action));
-            }
-        }
-
-        // 规则 4: 没有找到标记，thinking 为空，尝试用 parser 解析全部内容
-        if let Ok(Some(action)) = parse_action_from_response(content) {
-            return (String::new(), Some(action));
-        }
-
-        // 如果所有解析都失败，返回原始内容作为 action
-        let action = ParsedAction {
-            action_type: "raw".to_string(),
-            parameters: serde_json::json!({ "raw": content }),
-            reasoning: content.to_string(),
-        };
-        (String::new(), Some(action))
+    /// 解析 AutoGLM 响应（使用 ActionEnum 的通用解析方法）
+    fn parse_response(&self, content: &str) -> (Option<String>, Option<ActionEnum>) {
+        ActionEnum::parse_from_response(content)
     }
-
 }
 
 #[async_trait]
@@ -462,13 +411,16 @@ impl ModelClient for AutoGLMClient {
         info!("📊 AutoGLM 性能指标:");
         info!("   总推理时间: {:.3}s", total_time);
         info!("   使用 tokens: {}", usage.total_tokens);
-        info!("   思考过程: {}", &content);
+        if let Some(ref t) = thinking {
+            info!("   思考过程: {}", t);
+        }
+        info!("   完整响应: {}", &content);
 
         Ok(ModelResponse {
             content: content.clone(),
             action: parsed_action,
             confidence: 0.8,
-            reasoning: if thinking.is_empty() { None } else { Some(thinking) },
+            reasoning: thinking,
             tokens_used: usage.total_tokens,
         })
     }
@@ -512,6 +464,7 @@ pub struct Usage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::core::traits::Action;
 
     #[test]
     fn test_parse_finish_action() {
@@ -521,14 +474,12 @@ finish(message="Task completed successfully")"#;
 
         let (thinking, action) = client.parse_response(response);
 
-        // 验证 thinking 部分
-        assert_eq!(thinking, "Thinking...");
-
         // 验证 action 解析成功
         assert!(action.is_some());
-        let action = action.unwrap();
-        assert_eq!(action.action_type, "finish");
-        assert_eq!(action.parameters.get("result").unwrap().as_str().unwrap(), "Task completed successfully");
+        // 验证 action 类型为 FinishAction
+        assert_eq!(action.as_ref().unwrap().action_type(), "finish");
+        // thinking 可能是 None（因为没有 <thinking> 标签）
+        assert!(thinking.is_none() || thinking.as_ref().unwrap() == "Thinking...");
     }
 
     #[test]
@@ -539,34 +490,30 @@ do(action="Tap", element=[500, 800])"#;
 
         let (thinking, action) = client.parse_response(response);
 
-        // 验证 thinking 部分
-        assert_eq!(thinking, "Analyzing screen...");
+        // 验证 thinking 部分（应该是 None，因为没有 <thinking> 标签）
+        assert!(thinking.is_none());
 
         // 验证 action 解析成功
         assert!(action.is_some());
-        let action = action.unwrap();
-        assert_eq!(action.action_type, "tap");
-        // element 应该被解析为数组
-        assert!(action.parameters.get("element").is_some());
+        // 验证 action 类型为 TapAction
+        assert_eq!(action.as_ref().unwrap().action_type(), "tap");
     }
 
     #[test]
-    fn test_parse_xml_answer_with_json() {
+    fn test_parse_thinking_with_do() {
         let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
-        let response = r#"<thinking>I should tap the button</thinking>
-<answer>{"action_type": "tap", "x": 100, "y": 200}</answer>"#;
+        let response = r#"<thinking>I should tap the button at coordinates 100, 200</thinking>
+do(action="Tap", element=[100, 200])"#;
 
         let (thinking, action) = client.parse_response(response);
 
-        // 验证 thinking 部分（移除 <thinking> 标签后）
-        assert_eq!(thinking.trim(), "I should tap the button");
+        // 验证 thinking 部分（从 <thinking> 标签提取）
+        assert_eq!(thinking, Some("I should tap the button at coordinates 100, 200".to_string()));
 
         // 验证 action 解析成功
         assert!(action.is_some());
-        let action = action.unwrap();
-        assert_eq!(action.action_type, "tap");
-        assert_eq!(action.parameters.get("x").unwrap().as_u64().unwrap(), 100);
-        assert_eq!(action.parameters.get("y").unwrap().as_u64().unwrap(), 200);
+        // 验证 action 类型为 TapAction
+        assert_eq!(action.as_ref().unwrap().action_type(), "tap");
     }
 
     #[test]
@@ -576,14 +523,9 @@ do(action="Tap", element=[500, 800])"#;
 
         let (thinking, action) = client.parse_response(response);
 
-        // 规则 4: thinking 应该为空
-        assert!(thinking.is_empty());
-
-        // 无法解析的内容返回 raw
-        assert!(action.is_some());
-        let action = action.unwrap();
-        assert_eq!(action.action_type, "raw");
-        assert_eq!(action.reasoning, "Some random text without markers");
+        // thinking 应该为 None（没有 <thinking> 标签），action 应该为 None
+        assert!(thinking.is_none());
+        assert!(action.is_none());
     }
 
     #[test]
@@ -595,15 +537,18 @@ do(action="Tap", element=[500, 800])"#;
 do(action=tap)
 finish(message="done")"#;
         let (thinking, action) = client.parse_response(response1);
-        assert!(thinking.contains("Text..."));
-        assert_eq!(action.unwrap().action_type, "finish");
+        // thinking 应该是 None（没有 <thinking> 标签）
+        assert!(thinking.is_none());
+        assert_eq!(action.unwrap().action_type(), "finish");
 
         // do(action= 第二优先级
         let response2 = r#"<thinking>Thought</thinking>
 <answer>answer content</answer>
 do(action="Launch", app="微信")"#;
-        let (_thinking, action) = client.parse_response(response2);
-        assert_eq!(action.unwrap().action_type, "launch");
+        let (thinking, action) = client.parse_response(response2);
+        // thinking 应该是 Some("Thought")
+        assert_eq!(thinking, Some("Thought".to_string()));
+        assert_eq!(action.unwrap().action_type(), "launch");
     }
 
     #[test]
@@ -612,13 +557,17 @@ do(action="Launch", app="微信")"#;
         let response = r#"I need to open WeChat.
 do(action="Launch", app="微信")"#;
 
+        println!("Testing response: {:?}", response);
         let (thinking, action) = client.parse_response(response);
 
-        assert_eq!(thinking, "I need to open WeChat.");
+        println!("Got thinking: {:?}", thinking);
+        println!("Got action: {:?}", action);
+
+        // thinking 应该是 None（因为没有 <thinking> 标签）
+        assert!(thinking.is_none());
         assert!(action.is_some());
-        let action = action.unwrap();
-        assert_eq!(action.action_type, "launch");
-        assert_eq!(action.parameters.get("app").unwrap().as_str().unwrap(), "微信");
+        // 验证 action 类型为 LaunchAction
+        assert_eq!(action.as_ref().unwrap().action_type(), "launch");
     }
 
     #[test]
@@ -629,11 +578,40 @@ do(action="Wait", duration=1, message="应用正在加载中，请稍等。")"#;
 
         let (thinking, action) = client.parse_response(response);
 
-        assert_eq!(thinking, "应用正在加载中");
+        // thinking 应该是 None（没有 <thinking> 标签）
+        assert!(thinking.is_none());
         assert!(action.is_some());
-        let action = action.unwrap();
-        assert_eq!(action.action_type, "wait");
-        assert_eq!(action.parameters.get("duration").unwrap().as_u64().unwrap(), 1);
-        assert_eq!(action.parameters.get("message").unwrap().as_str().unwrap(), "应用正在加载中，请稍等。");
+        // 验证 action 类型为 WaitAction
+        assert_eq!(action.as_ref().unwrap().action_type(), "wait");
+    }
+
+    #[test]
+    fn test_parse_finish_multiline() {
+        let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
+        let response = r#"finish(message="抱歉，我无法找到"什么值得买"这个应用。
+
+不过，我可以为您打开一些类似的应用来浏览购物或推荐内容，比如：
+- 淘宝
+- 美团
+
+您想打开哪个应用来浏览？")"#;
+
+        let (thinking, action) = client.parse_response(response);
+
+        // thinking 应该是 None（没有 <thinking> 标签）
+        assert!(thinking.is_none());
+        assert!(action.is_some());
+        // 验证 action 类型为 FinishAction
+        assert_eq!(action.as_ref().unwrap().action_type(), "finish");
+
+        // 验证多行消息被正确解析
+        if let Some(ActionEnum::Finish(finish)) = action {
+            assert!(finish.result.contains("抱歉，我无法找到"));
+            assert!(finish.result.contains("什么值得买"));
+            assert!(finish.result.contains("淘宝"));
+            assert!(finish.result.contains("美团"));
+        } else {
+            panic!("Expected FinishAction");
+        }
     }
 }

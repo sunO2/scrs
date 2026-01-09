@@ -11,24 +11,48 @@ pub struct TypeAction {
 }
 
 impl Action for TypeAction {
+    fn action_type(&self) -> String {
+        "type".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
+        use tracing::{info, debug};
+
+        info!("⌨️  TypeAction: 执行输入");
+        info!("   文本: {}", self.text);
+        info!("   文本长度: {} 字符", self.text.len());
+        info!("   描述: {:?}", self.description);
+
         let start = Instant::now();
+
+        debug!("   调用 device.input_text...");
         device.input_text(&self.text).await?;
+
+        let elapsed = start.elapsed();
+        info!("   ✅ 输入完成 (耗时: {}ms)", elapsed.as_millis());
+
         Ok(ActionResult::success(
             self.description
                 .clone()
                 .unwrap_or_else(|| format!("输入文本: {}", self.text)),
-            start.elapsed().as_millis() as u32,
+            elapsed.as_millis() as u32,
         ))
     }
 
     fn validate(&self) -> Result<(), ActionError> {
+        use tracing::debug;
+
+        debug!("🔍 TypeAction: 验证参数");
+        debug!("   文本长度: {} 字符", self.text.len());
+
         if self.text.is_empty() {
             return Err(ActionError::InvalidParameters("文本不能为空".to_string()));
         }
         if self.text.len() > 10000 {
             return Err(ActionError::InvalidParameters("文本过长".to_string()));
         }
+
+        debug!("   ✅ 验证通过");
         Ok(())
     }
 
@@ -82,6 +106,10 @@ pub struct PressKeyAction {
 }
 
 impl Action for PressKeyAction {
+    fn action_type(&self) -> String {
+        "press_key".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         device.press_key(self.keycode.to_android_keycode()).await?;

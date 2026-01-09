@@ -12,19 +12,42 @@ pub struct TapAction {
 }
 
 impl Action for TapAction {
+    fn action_type(&self) -> String {
+        "tap".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
+        use tracing::{info, debug};
+
+        info!("👆 TapAction: 执行点击");
+        info!("   坐标: ({}, {})", self.x, self.y);
+        info!("   描述: {:?}", self.description);
+
         let start = Instant::now();
+
+        debug!("   调用 device.tap...");
         device.tap(self.x, self.y).await?;
+
+        let elapsed = start.elapsed();
+        info!("   ✅ 点击完成 (耗时: {}ms)", elapsed.as_millis());
+
         Ok(ActionResult::success(
             self.description.clone().unwrap_or_else(|| format!("点击 ({}, {})", self.x, self.y)),
-            start.elapsed().as_millis() as u32,
+            elapsed.as_millis() as u32,
         ))
     }
 
     fn validate(&self) -> Result<(), ActionError> {
+        use tracing::debug;
+
+        debug!("🔍 TapAction: 验证参数");
+        debug!("   坐标: ({}, {})", self.x, self.y);
+
         if self.x > 10000 || self.y > 10000 {
             return Err(ActionError::OutOfBounds { x: self.x, y: self.y });
         }
+
+        debug!("   ✅ 验证通过");
         Ok(())
     }
 
@@ -43,6 +66,10 @@ pub struct LongPressAction {
 }
 
 impl Action for LongPressAction {
+    fn action_type(&self) -> String {
+        "long_press".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         device.long_press(self.x, self.y, self.duration_ms).await?;
@@ -83,6 +110,10 @@ pub struct DoubleTapAction {
 }
 
 impl Action for DoubleTapAction {
+    fn action_type(&self) -> String {
+        "double_tap".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         device.double_tap(self.x, self.y).await?;

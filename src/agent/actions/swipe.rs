@@ -15,11 +15,29 @@ pub struct SwipeAction {
 }
 
 impl Action for SwipeAction {
+    fn action_type(&self) -> String {
+        "swipe".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
+        use tracing::{info, debug};
+
+        info!("👆 SwipeAction: 执行滑动");
+        info!("   起点: ({}, {})", self.start_x, self.start_y);
+        info!("   终点: ({}, {})", self.end_x, self.end_y);
+        info!("   持续时间: {}ms", self.duration_ms);
+        info!("   描述: {:?}", self.description);
+
         let start = Instant::now();
+
+        debug!("   调用 device.swipe...");
         device
             .swipe(self.start_x, self.start_y, self.end_x, self.end_y, self.duration_ms)
             .await?;
+
+        let elapsed = start.elapsed();
+        info!("   ✅ 滑动完成 (耗时: {}ms)", elapsed.as_millis());
+
         Ok(ActionResult::success(
             self.description.clone().unwrap_or_else(|| {
                 format!(
@@ -27,11 +45,18 @@ impl Action for SwipeAction {
                     self.start_x, self.start_y, self.end_x, self.end_y, self.duration_ms
                 )
             }),
-            start.elapsed().as_millis() as u32,
+            elapsed.as_millis() as u32,
         ))
     }
 
     fn validate(&self) -> Result<(), ActionError> {
+        use tracing::debug;
+
+        debug!("🔍 SwipeAction: 验证参数");
+        debug!("   起点: ({}, {})", self.start_x, self.start_y);
+        debug!("   终点: ({}, {})", self.end_x, self.end_y);
+        debug!("   持续时间: {}ms", self.duration_ms);
+
         if self.start_x > 10000 || self.start_y > 10000 || self.end_x > 10000 || self.end_y > 10000 {
             return Err(ActionError::OutOfBounds {
                 x: self.start_x.max(self.end_x),
@@ -44,6 +69,8 @@ impl Action for SwipeAction {
         if self.duration_ms > 5000 {
             return Err(ActionError::DurationTooLong(self.duration_ms));
         }
+
+        debug!("   ✅ 验证通过");
         Ok(())
     }
 
@@ -76,6 +103,10 @@ pub struct ScrollAction {
 }
 
 impl Action for ScrollAction {
+    fn action_type(&self) -> String {
+        "scroll".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
 

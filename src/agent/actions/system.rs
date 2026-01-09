@@ -63,23 +63,32 @@ fn get_app_packages() -> HashMap<String, &'static str> {
 
 /// 将应用名称转换为包名
 pub fn app_name_to_package(app_name: &str) -> Option<String> {
+    use tracing::debug;
+
+    debug!("🔍 app_name_to_package: {}", app_name);
+
     let packages = get_app_packages();
 
     // 首先尝试直接匹配
     if let Some(package) = packages.get(app_name) {
+        debug!("   ✅ 直接匹配: {} -> {}", app_name, package);
         return Some(package.to_string());
     }
 
     // 尝试小写匹配
-    if let Some(package) = packages.get(&app_name.to_lowercase()) {
+    let lower_name = app_name.to_lowercase();
+    if let Some(package) = packages.get(&lower_name) {
+        debug!("   ✅ 小写匹配: {} -> {} -> {}", app_name, lower_name, package);
         return Some(package.to_string());
     }
 
     // 如果已经是包名格式（包含点），直接返回
     if app_name.contains('.') {
+        debug!("   ✅ 包名格式: {}", app_name);
         return Some(app_name.to_string());
     }
 
+    debug!("   ❌ 未找到匹配: {}", app_name);
     None
 }
 
@@ -106,30 +115,94 @@ impl LaunchAction {
 }
 
 impl Action for LaunchAction {
+    fn action_type(&self) -> String {
+        "launch".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
+        use tracing::{info, debug, error};
+
+        info!("🚀 LaunchAction: 开始执行");
+        info!("   原始输入: package={}", self.package);
+        info!("   activity: {:?}", self.activity);
+        info!("   description: {:?}", self.description);
+
+        // 尝试将应用名称转换为包名
+        let actual_package = if !self.package.contains('.') {
+            debug!("   检测到应用名称，尝试转换为包名...");
+            match app_name_to_package(&self.package) {
+                Some(pkg) => {
+                    info!("   ✅ 应用名称映射: {} -> {}", self.package, pkg);
+                    pkg
+                }
+                None => {
+                    error!("   ❌ 无法识别的应用名称: {}", self.package);
+                    return Err(AppError::AdbError(format!(
+                        "无法识别的应用名称: {}，请使用完整的包名或已知的应用名称",
+                        self.package
+                    )));
+                }
+            }
+        } else {
+            info!("   检测到包名格式: {}", self.package);
+            self.package.clone()
+        };
+
+        info!("   实际包名: {}", actual_package);
+
         let start = Instant::now();
-        device.launch_app(&self.package).await?;
-        Ok(ActionResult::success(
-            self.description
-                .clone()
-                .unwrap_or_else(|| format!("启动应用: {}", self.package)),
-            start.elapsed().as_millis() as u32,
-        ))
+
+        debug!("   调用 device.launch_app...");
+        match device.launch_app(&actual_package).await {
+            Ok(_) => {
+                let elapsed = start.elapsed();
+                info!("   ✅ 应用启动成功: {} (耗时: {}ms)", actual_package, elapsed.as_millis());
+                Ok(ActionResult::success(
+                    self.description
+                        .clone()
+                        .unwrap_or_else(|| format!("启动应用: {}", actual_package)),
+                    elapsed.as_millis() as u32,
+                ))
+            }
+            Err(e) => {
+                error!("   ❌ 应用启动失败: {}", e);
+                error!("   包名: {}", actual_package);
+                error!("   错误详情: {:?}", e);
+                Err(e)
+            }
+        }
     }
 
     fn validate(&self) -> Result<(), ActionError> {
+        use tracing::debug;
+
+        debug!("🔍 LaunchAction: 验证参数");
+        debug!("   package={}", self.package);
+
         if self.package.is_empty() {
             return Err(ActionError::InvalidParameters("应用名称不能为空".to_string()));
         }
+
         // 检查是否为有效的包名或可识别的应用名称
         if !self.package.contains('.') {
+            debug!("   尝试映射应用名称...");
             // 尝试将应用名称转换为包名
-            if app_name_to_package(&self.package).is_none() {
-                return Err(ActionError::InvalidParameters(
-                    format!("无法识别的应用名称: {}", self.package),
-                ));
+            match app_name_to_package(&self.package) {
+                Some(package) => {
+                    debug!("   ✅ 应用名称映射: {} -> {}", self.package, package);
+                }
+                None => {
+                    debug!("   ❌ 无法识别的应用名称: {}", self.package);
+                    return Err(ActionError::InvalidParameters(
+                        format!("暂时没有 {} 对应的包名 可以在Home页其他页面查找一下", self.package),
+                    ));
+                }
             }
+        } else {
+            debug!("   检测到包名格式，跳过映射");
         }
+
+        debug!("   ✅ 验证通过");
         Ok(())
     }
 
@@ -148,6 +221,10 @@ pub struct WaitAction {
 }
 
 impl Action for WaitAction {
+    fn action_type(&self) -> String {
+        "wait".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         sleep(std::time::Duration::from_millis(self.duration_ms as u64)).await;
@@ -180,6 +257,10 @@ pub struct ScreenshotAction {
 }
 
 impl Action for ScreenshotAction {
+    fn action_type(&self) -> String {
+        "screenshot".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         let screenshot = device.screenshot().await?;
@@ -214,6 +295,10 @@ pub struct FinishAction {
 }
 
 impl Action for FinishAction {
+    fn action_type(&self) -> String {
+        "finish".to_string()
+    }
+
     async fn execute(&self, _device: &dyn Device) -> Result<ActionResult, AppError> {
         Ok(ActionResult {
             success: self.success,

@@ -10,6 +10,10 @@ pub struct BackAction {
 }
 
 impl Action for BackAction {
+    fn action_type(&self) -> String {
+        "back".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         device.back().await?;
@@ -35,6 +39,10 @@ pub struct HomeAction {
 }
 
 impl Action for HomeAction {
+    fn action_type(&self) -> String {
+        "home".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         device.home().await?;
@@ -60,6 +68,10 @@ pub struct RecentAction {
 }
 
 impl Action for RecentAction {
+    fn action_type(&self) -> String {
+        "recent".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         device.recent().await?;
@@ -89,6 +101,10 @@ pub struct NotificationAction {
 }
 
 impl Action for NotificationAction {
+    fn action_type(&self) -> String {
+        "notification".to_string()
+    }
+
     async fn execute(&self, device: &dyn Device) -> Result<ActionResult, AppError> {
         let start = Instant::now();
         device.notification().await?;

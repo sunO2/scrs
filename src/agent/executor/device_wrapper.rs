@@ -38,26 +38,22 @@ impl ScrcpyDeviceWrapper {
         }
     }
 
-    /// 转换坐标：从逻辑坐标（Override resolution）转换为物理坐标（Physical resolution）
+    /// 转换坐标：从 1000x1000 逻辑坐标转换为 override_resolution 坐标
     async fn convert_to_physical_coords(&self, logical_x: u32, logical_y: u32) -> Result<(u32, u32), AppError> {
-        let physical = self.physical_resolution.read().await;
         let override_res = self.override_resolution.read().await;
 
-        match (*physical, *override_res) {
-            (Some((phys_w, phys_h)), Some((override_w, override_h))) => {
-                // 计算缩放比例
-                let scale_x = (phys_w as f64) / (override_w as f64);
-                let scale_y = (phys_h as f64) / (override_h as f64);
+        match *override_res {
+            Some((override_w, override_h)) => {
+                // 输入坐标基于 1000x1000，转换为 override_resolution
+                let physical_x = (logical_x as f64 * override_w as f64 / 1000.0) as u32;
+                let physical_y = (logical_y as f64 * override_h as f64 / 1000.0) as u32;
 
-                let physical_x = (logical_x as f64 * scale_x) as u32;
-                let physical_y = (logical_y as f64 * scale_y) as u32;
-
-                debug!("坐标转换: ({}, {}) -> ({}, {}) [缩放: x={:.2}, y={:.2}]",
-                    logical_x, logical_y, physical_x, physical_y, scale_x, scale_y);
+                debug!("坐标转换: 1000x1000 的 ({}, {}) -> {}x{} 的 ({}, {})",
+                    logical_x, logical_y, override_w, override_h, physical_x, physical_y);
 
                 Ok((physical_x, physical_y))
             }
-            _ => {
+            None => {
                 // 如果没有分辨率信息，直接返回原始坐标
                 debug!("没有分辨率信息，不进行坐标转换: ({}, {})", logical_x, logical_y);
                 Ok((logical_x, logical_y))
@@ -325,6 +321,8 @@ impl Device for ScrcpyDeviceWrapper {
     }
 
     async fn tap(&self, x: u32, y: u32) -> Result<(), AppError> {
+        use tracing::{debug, warn};
+
         debug!("执行点击: ({}, {})", x, y);
 
         // 转换坐标：从逻辑坐标转换为物理坐标
@@ -342,10 +340,37 @@ impl Device for ScrcpyDeviceWrapper {
             ])
             .output()
             .await
-            .map_err(|e| AppError::AdbError(format!("点击失败: {}", e)))?;
+            .map_err(|e| AppError::AdbError(format!(
+                "点击操作失败：无法执行 ADB 命令\n\n\
+                坐标：({}, {})\n\
+                错误：{}\n\n\
+                建议：\n\
+                - 检查设备连接\n\
+                - 检查坐标是否在屏幕范围内\n\
+                - 尝试重新连接设备",
+                x, y, e
+            )))?;
 
         if !output.status.success() {
-            return Err(AppError::AdbError("点击命令执行失败".to_string()));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("点击命令执行失败: {}", stderr);
+
+            return Err(AppError::AdbError(format!(
+                "点击操作失败：命令执行失败\n\n\
+                坐标：({}, {})\n\
+                转换后物理坐标：({}, {})\n\
+                错误信息：{}\n\n\
+                可能的原因：\n\
+                1. 设备连接断开\n\
+                2. 坐标超出屏幕范围\n\
+                3. 屏幕锁定或应用无响应\n\n\
+                建议：\n\
+                - 检查设备连接状态\n\
+                - 确认坐标在屏幕范围内\n\
+                - 检查屏幕是否锁定\n\
+                - 尝试重新执行操作",
+                x, y, physical_x, physical_y, stderr
+            )));
         }
 
         Ok(())
@@ -359,6 +384,8 @@ impl Device for ScrcpyDeviceWrapper {
         end_y: u32,
         duration_ms: u32,
     ) -> Result<(), AppError> {
+        use tracing::{debug, warn};
+
         debug!(
             "执行滑动: ({}, {}) -> ({}, {}) {}ms",
             start_x, start_y, end_x, end_y, duration_ms
@@ -383,10 +410,44 @@ impl Device for ScrcpyDeviceWrapper {
             ])
             .output()
             .await
-            .map_err(|e| AppError::AdbError(format!("滑动失败: {}", e)))?;
+            .map_err(|e| AppError::AdbError(format!(
+                "滑动操作失败：无法执行 ADB 命令\n\n\
+                起点：({}, {})\n\
+                终点：({}, {})\n\
+                持续时间：{}ms\n\
+                错误：{}\n\n\
+                建议：\n\
+                - 检查设备连接\n\
+                - 检查坐标是否在屏幕范围内\n\
+                - 尝试重新连接设备",
+                start_x, start_y, end_x, end_y, duration_ms, e
+            )))?;
 
         if !output.status.success() {
-            return Err(AppError::AdbError("滑动命令执行失败".to_string()));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("滑动命令执行失败: {}", stderr);
+
+            return Err(AppError::AdbError(format!(
+                "滑动操作失败：命令执行失败\n\n\
+                起点：({}, {}) -> 物理坐标：({}, {})\n\
+                终点：({}, {}) -> 物理坐标：({}, {})\n\
+                持续时间：{}ms\n\
+                错误信息：{}\n\n\
+                可能的原因：\n\
+                1. 设备连接断开\n\
+                2. 坐标超出屏幕范围\n\
+                3. 屏幕锁定或应用无响应\n\
+                4. 滑动距离过短或时间设置不当\n\n\
+                建议：\n\
+                - 检查设备连接状态\n\
+                - 确认坐标在屏幕范围内\n\
+                - 检查屏幕是否锁定\n\
+                - 尝试增加滑动距离或调整时间\n\
+                - 尝试重新执行操作",
+                start_x, start_y, phys_start_x, phys_start_y,
+                end_x, end_y, phys_end_x, phys_end_y,
+                duration_ms, stderr
+            )));
         }
 
         Ok(())
@@ -409,6 +470,8 @@ impl Device for ScrcpyDeviceWrapper {
     }
 
     async fn input_text(&self, text: &str) -> Result<(), AppError> {
+        use tracing::{debug, warn};
+
         debug!("输入文本: {}", text);
 
         // 转义特殊字符
@@ -433,10 +496,37 @@ impl Device for ScrcpyDeviceWrapper {
             ])
             .output()
             .await
-            .map_err(|e| AppError::AdbError(format!("输入文本失败: {}", e)))?;
+            .map_err(|e| AppError::AdbError(format!(
+                "输入文本失败：无法执行 ADB 命令\n\n\
+                文本内容：{}\n\
+                错误：{}\n\n\
+                建议：\n\
+                - 检查设备连接\n\
+                - 确认输入框已激活\n\
+                - 尝试重新连接设备",
+                text, e
+            )))?;
 
         if !output.status.success() {
-            return Err(AppError::AdbError("输入文本命令执行失败".to_string()));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!("输入文本命令执行失败: {}", stderr);
+
+            return Err(AppError::AdbError(format!(
+                "输入文本失败：命令执行失败\n\n\
+                文本内容：{}\n\
+                错误信息：{}\n\n\
+                可能的原因：\n\
+                1. 设备连接断开\n\
+                2. 没有激活的输入框\n\
+                3. 输入框不支持文本输入\n\
+                4. 特殊字符转义问题\n\n\
+                建议：\n\
+                - 确保输入框已激活（先点击输入框）\n\
+                - 检查设备连接状态\n\
+                - 尝试分段输入较长文本\n\
+                - 如果是特殊字符，尝试使用其他输入方式",
+                text, stderr
+            )));
         }
 
         Ok(())
@@ -486,9 +576,19 @@ impl Device for ScrcpyDeviceWrapper {
     }
 
     async fn launch_app(&self, package: &str) -> Result<(), AppError> {
-        info!("启动应用: {}", package);
+        use tracing::{info, debug, warn, error};
+
+        info!("🚀 launch_app: 准备启动应用");
+        info!("   设备: {}", self.serial);
+        info!("   包名: {}", package);
 
         // 使用 monkey 命令启动应用
+        let cmd = format!(
+            "adb -s {} shell monkey -p {} -c android.intent.category.LAUNCHER 1",
+            self.serial, package
+        );
+        debug!("   执行命令: {}", cmd);
+
         let output = tokio::process::Command::new("adb")
             .args([
                 "-s",
@@ -502,18 +602,106 @@ impl Device for ScrcpyDeviceWrapper {
                 "1",
             ])
             .output()
-            .await
-            .map_err(|e| AppError::AdbError(format!("启动应用失败: {}", e)))?;
+            .await;
 
-        if !output.status.success() {
-            return Err(AppError::AdbError(format!(
-                "启动应用失败: {}",
-                package
-            )));
+        match output {
+            Ok(result) => {
+                debug!("   命令执行完成");
+                debug!("   退出码: {}", result.status);
+
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let stderr = String::from_utf8_lossy(&result.stderr);
+
+                if !stdout.is_empty() {
+                    debug!("   stdout: {}", stdout);
+                }
+                if !stderr.is_empty() {
+                    debug!("   stderr: {}", stderr);
+                }
+
+                if !result.status.success() {
+                    error!("   ❌ 命令执行失败");
+                    error!("   退出码: {:?}", result.status.code());
+
+                    // 检查是否是应用不存在的问题
+                    if stderr.contains("No package found") || stdout.contains("No package found") {
+                        return Err(AppError::AdbError(format!(
+                            "启动应用失败：找不到应用 '{}'\n\n\
+                            可能的原因：\n\
+                            1. 应用未安装\n\
+                            2. 包名错误\n\
+                            3. 应用名称不在支持列表中\n\n\
+                            建议：\n\
+                            - 检查应用是否已安装\n\
+                            - 使用完整包名（如 com.tencent.mm）\n\
+                            - 或使用支持的应用名称（如：微信、淘宝、抖音等）",
+                            package
+                        )));
+                    }
+
+                    // 检查设备连接问题
+                    if stderr.contains("device not found") || stderr.contains("device offline") {
+                        return Err(AppError::AdbError(format!(
+                            "设备连接失败：设备 '{}' 不可用\n\n\
+                            可能的原因：\n\
+                            1. 设备未连接\n\
+                            2. USB 调试未开启\n\
+                            3. ADB 连接断开\n\n\
+                            建议：\n\
+                            - 检查设备是否连接\n\
+                            - 重新连接设备\n\
+                            - 重启 ADB 服务",
+                            self.serial
+                        )));
+                    }
+
+                    // 检查权限问题
+                    if stderr.contains("permission denied") {
+                        return Err(AppError::AdbError(
+                            "权限不足：无法启动应用\n\n\
+                            可能的原因：\n\
+                            1. ADB 权限不足\n\
+                            2. 应用需要特殊权限\n\n\
+                            建议：\n\
+                            - 检查 ADB 调试权限\n\
+                            - 尝试手动授权应用".to_string()
+                        ));
+                    }
+
+                    // 检查其他常见错误
+                    let error_msg = if !stderr.is_empty() {
+                        stderr.to_string()
+                    } else if !stdout.is_empty() {
+                        stdout.to_string()
+                    } else {
+                        format!("未知错误 (退出码: {:?})", result.status.code())
+                    };
+
+                    return Err(AppError::AdbError(format!(
+                        "启动应用失败：{}\n\n\
+                        应用包名：{}\n\
+                        错误详情：{}\n\n\
+                        建议：\n\
+                        - 检查应用是否已安装\n\
+                        - 尝试使用其他启动方式\n\
+                        - 检查设备状态",
+                        package, package, error_msg
+                    )));
+                }
+
+                info!("   ✅ 命令执行成功");
+            }
+            Err(e) => {
+                error!("   ❌ 命令执行异常: {}", e);
+                return Err(AppError::AdbError(format!("ADB 命令执行失败: {}", e)));
+            }
         }
 
         // 等待应用启动
+        debug!("   等待应用启动...");
         tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+        info!("   ✅ 应用启动流程完成");
 
         Ok(())
     }

@@ -74,10 +74,8 @@ pub trait Action: Send + Sync + std::fmt::Debug {
     /// 获取操作描述
     fn description(&self) -> String;
 
-    /// 获取操作类型
-    fn action_type(&self) -> String {
-        std::any::type_name::<Self>().to_string()
-    }
+    /// 获取操作类型（必需方法，用于 dyn 兼容）
+    fn action_type(&self) -> String;
 
     /// 检查操作是否可逆
     fn is_reversible(&self) -> bool {
@@ -271,10 +269,10 @@ pub enum MessageRole {
 }
 
 /// 模型响应
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ModelResponse {
     pub content: String,
-    pub action: Option<ParsedAction>,
+    pub action: Option<crate::agent::actions::base::ActionEnum>,
     pub confidence: f32,
     pub reasoning: Option<String>,
     pub tokens_used: u32,

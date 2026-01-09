@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, Mutex};
 use tokio::task::AbortHandle;
 use tracing::{debug, info, warn, error};
-use crate::agent::core::traits::{Device, Agent, AgentStatus, AgentFeedback, ExecutionStep, ModelClient};
+use crate::agent::core::traits::{Device, Agent, AgentStatus, AgentFeedback, ExecutionStep, ModelClient, Action};
 use crate::agent::core::state::{AgentRuntime, AgentConfig, AgentState};
 use crate::agent::executor::ActionHandler;
 use crate::agent::context::{ConversationContext, ShortTermMemory};
@@ -214,7 +214,7 @@ impl PhoneAgent {
             no_action_count = 0;
 
             // 检查是否完成
-            if parsed_action.action_type == "finish" {
+            if parsed_action.action_type() == "finish" {
                 // 添加助手完成消息
                 let reasoning = model_response.reasoning.clone().unwrap_or_default();
                 let completion_msg = format!(
@@ -238,11 +238,11 @@ impl PhoneAgent {
             // 更新状态为执行中
             *self.runtime.state.write().await = AgentState::Executing {
                 step,
-                action: parsed_action.action_type.clone(),
+                action: parsed_action.action_type(),
             };
 
             // 执行操作
-            debug!("步骤 {}: 执行操作 {:?}", step, parsed_action.action_type);
+            debug!("步骤 {}: 执行操作 {:?}", step, parsed_action.action_type());
             let action_result = match self.action_handler.execute_parsed_action(&parsed_action).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -259,8 +259,8 @@ impl PhoneAgent {
             let reasoning_text = model_response.reasoning.clone().unwrap_or_default();
             let execution_step = ExecutionStep {
                 step_number: step,
-                action_type: parsed_action.action_type.clone(),
-                action_description: parsed_action.reasoning.clone(),
+                action_type: parsed_action.action_type(),
+                action_description: parsed_action.description(),
                 result: action_result.clone(),
                 timestamp: chrono::Utc::now(),
                 screenshot: screenshot.clone(),
@@ -272,16 +272,15 @@ impl PhoneAgent {
             // 添加到对话上下文（保留旧代码）
             self.conversation.add_message(
                 crate::agent::context::MessageRole::Assistant,
-                format!("执行操作: {}", parsed_action.action_type),
+                format!("执行操作: {}", parsed_action.action_type()),
                 Some(screenshot.clone()),
             ).await;
 
             // 将助手响应添加到消息列表
             let assistant_response = format!(
-                "我决定执行: {}\n操作类型: {}\n参数: {}\n思考: {}",
-                parsed_action.action_type,
-                parsed_action.action_type,
-                parsed_action.parameters,
+                "我决定执行: {}\n操作类型: {}\n思考: {}",
+                parsed_action.description(),
+                parsed_action.action_type(),
                 reasoning_text
             );
             self.add_assistant_message(assistant_response).await;
@@ -291,7 +290,7 @@ impl PhoneAgent {
                 format!(
                     "操作结果（步骤 {}）:\n- 操作: {}\n- 状态: 成功\n- 详情: {}\n- 耗时: {}ms\n\n请分析当前屏幕并决定下一步操作。",
                     step,
-                    parsed_action.action_type,
+                    parsed_action.action_type(),
                     action_result.message,
                     action_result.duration_ms
                 )
@@ -299,7 +298,7 @@ impl PhoneAgent {
                 format!(
                     "操作结果（步骤 {}）:\n- 操作: {}\n- 状态: 失败\n- 错误: {}\n- 耗时: {}ms\n\n请分析失败原因并决定下一步操作。",
                     step,
-                    parsed_action.action_type,
+                    parsed_action.action_type(),
                     action_result.message,
                     action_result.duration_ms
                 )
@@ -327,8 +326,8 @@ impl PhoneAgent {
                 Some(screenshot.clone()),
                 model_response.content.clone(),
                 model_response.reasoning.clone(),
-                parsed_action.action_type.clone(),
-                parsed_action.parameters.clone(),
+                parsed_action.action_type(),
+                serde_json::json!({}), // ActionEnum 没有 parameters 字段，使用空对象
                 Some(ActionResultLog {
                     success: action_result.success,
                     message: action_result.message.clone(),

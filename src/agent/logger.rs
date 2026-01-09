@@ -251,9 +251,13 @@ mod tests {
             task_id: Some("task_123".to_string()),
             step_number: 1,
             request: LogRequest {
-                user_message: "Open WeChat".to_string(),
+                messages: vec![
+                    LogMessage {
+                        role: "user".to_string(),
+                        content: "Open WeChat".to_string(),
+                    }
+                ],
                 screenshot_base64: None,
-                messages_count: 5,
             },
             response: LogResponse {
                 model_response: "I will open WeChat".to_string(),

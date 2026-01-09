@@ -154,8 +154,10 @@ impl ModelClient for OpenAIClient {
             total_tokens: 0,
         });
 
-        // 解析操作
-        let action = parse_action_from_response(&content)?;
+        // 解析操作（目前返回 None，因为 GPT 客户端暂不使用）
+        // TODO: 实现 ParsedAction 到 ActionEnum 的转换
+        let _action = parse_action_from_response(&content)?;
+        let action = None;
 
         Ok(ModelResponse {
             content: content.clone(),
