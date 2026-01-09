@@ -50,6 +50,7 @@ async fn main() {
         temperature: 0.2,
         top_p: 0.1,
         timeout: 60, // 增加超时时间到 60 秒
+        auxiliary_model_name: Some("GLM-4-Flash".to_string()), // 可选：配置辅助模型名称
     };
 
     // 检查 API Key 是否有效

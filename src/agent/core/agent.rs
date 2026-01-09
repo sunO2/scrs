@@ -104,7 +104,7 @@ impl PhoneAgent {
         };
 
         // 初始化消息列表（添加系统提示词和用户任务）
-        let system_prompt = crate::agent::llm::autoglm_client::get_system_prompt(screen_width, screen_height);
+        let system_prompt = crate::agent::llm::prompts::get_main_system_prompt(screen_width, screen_height);
         self.initialize_messages(system_prompt).await;
 
         // 添加初始用户任务
@@ -194,27 +194,27 @@ impl PhoneAgent {
             let query_duration = query_start.elapsed();
 
             // 检查是否有操作
-            let parsed_action = match model_response.action {
-                Some(action) => action,
-                None => {
-                    // 没有解析到有效操作，添加反馈消息让 LLM 重新回复
-                    info!("没有解析到有效操作，添加反馈消息让 LLM 重新回复");
-                    let feedback_msg = format!(
-                        "你的回复中没有包含 do(action=...) 格式的执行动作，我无法解析。\n\n请严格按照 do(action=ActionType, ...) 格式回复，例如：\n- do(action=\"Tap\", element=[x,y])\n- do(action=\"Type\", text=\"xxx\")\n- do(action=\"Swipe\", start=[x1,y1], end=[x2,y2])\n- do(action=\"Launch\", app=\"xxx\")\n- do(action=\"Back\")\n\n请重新分析屏幕并告诉我下一步操作。"
-                    );
-                    self.add_assistant_message(model_response.content).await;
-                    self.add_user_message(feedback_msg).await;
-                    no_action_count += 1;
-                    step = self.runtime.increment_step().await;
-                    continue;
-                }
-            };
+            let parsed_actions = model_response.actions;
+
+            // 检查是否为空
+            if parsed_actions.is_empty() {
+                // 没有解析到有效操作，添加反馈消息让 LLM 重新回复
+                info!("没有解析到有效操作，添加反馈消息让 LLM 重新回复");
+                let feedback_msg = format!(
+                    "你的回复中没有包含 do(action=...) 格式的执行动作，我无法解析。\n\n请严格按照 do(action=ActionType, ...) 格式回复，例如：\n- do(action=\"Tap\", element=[x,y])\n- do(action=\"Type\", text=\"xxx\")\n- do(action=\"Swipe\", start=[x1,y1], end=[x2,y2])\n- do(action=\"Launch\", app=\"xxx\")\n- do(action=\"Back\")\n\n请重新分析屏幕并告诉我下一步操作。"
+                );
+                self.add_assistant_message(model_response.content).await;
+                self.add_user_message(feedback_msg).await;
+                no_action_count += 1;
+                step = self.runtime.increment_step().await;
+                continue;
+            }
 
             // 重置无操作计数
             no_action_count = 0;
 
-            // 检查是否完成
-            if parsed_action.action_type() == "finish" {
+            // 检查是否有 finish 操作（最高优先级）
+            if let Some(finish_action) = parsed_actions.iter().find(|a| a.action_type() == "finish") {
                 // 添加助手完成消息
                 let reasoning = model_response.reasoning.clone().unwrap_or_default();
                 let completion_msg = format!(
@@ -235,108 +235,121 @@ impl PhoneAgent {
                 break;
             }
 
-            // 更新状态为执行中
-            *self.runtime.state.write().await = AgentState::Executing {
-                step,
-                action: parsed_action.action_type(),
-            };
+            // 执行所有操作（串行）
+            info!("开始执行 {} 个操作", parsed_actions.len());
+            let action_results = self.action_handler.execute_multiple_actions(&parsed_actions).await;
 
-            // 执行操作
-            debug!("步骤 {}: 执行操作 {:?}", step, parsed_action.action_type());
-            let action_result = match self.action_handler.execute_parsed_action(&parsed_action).await {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("操作执行失败: {}", e);
-                    // 继续执行，不中断
-                    crate::agent::core::traits::ActionResult::failure(
-                        format!("{}", e),
-                        0
-                    )
-                }
-            };
-
-            // 记录步骤
+            // 记录每个操作的步骤
             let reasoning_text = model_response.reasoning.clone().unwrap_or_default();
-            let execution_step = ExecutionStep {
-                step_number: step,
-                action_type: parsed_action.action_type(),
-                action_description: parsed_action.description(),
-                result: action_result.clone(),
-                timestamp: chrono::Utc::now(),
-                screenshot: screenshot.clone(),
-                reasoning: reasoning_text.clone(),
-            };
 
-            self.runtime.add_step(execution_step).await;
+            for (idx, (action, result)) in parsed_actions.iter().zip(action_results.iter()).enumerate() {
+                // 更新状态为执行中
+                *self.runtime.state.write().await = AgentState::Executing {
+                    step,
+                    action: action.action_type(),
+                };
 
-            // 添加到对话上下文（保留旧代码）
-            self.conversation.add_message(
-                crate::agent::context::MessageRole::Assistant,
-                format!("执行操作: {}", parsed_action.action_type()),
-                Some(screenshot.clone()),
-            ).await;
+                debug!("步骤 {}: 记录操作 {}/{}", step, idx + 1, parsed_actions.len());
+
+                // 记录步骤
+                let execution_step = ExecutionStep {
+                    step_number: step,
+                    action_type: action.action_type(),
+                    action_description: action.description(),
+                    result: result.clone(),
+                    timestamp: chrono::Utc::now(),
+                    screenshot: screenshot.clone(),
+                    reasoning: reasoning_text.clone(),
+                };
+
+                self.runtime.add_step(execution_step).await;
+
+                // 添加到对话上下文（包含执行结果）
+                let status = if result.success { "成功" } else { "失败" };
+                self.conversation.add_message(
+                    crate::agent::context::MessageRole::Assistant,
+                    format!("执行操作: {} - {} ({})",
+                        action.action_type(),
+                        status,
+                        result.message
+                    ),
+                    Some(screenshot.clone()),
+                ).await;
+            }
 
             // 将助手响应添加到消息列表
+            let actions_summary: Vec<String> = parsed_actions.iter()
+                .map(|a| format!("{} ({})", a.description(), a.action_type()))
+                .collect();
             let assistant_response = format!(
-                "我决定执行: {}\n操作类型: {}\n思考: {}",
-                parsed_action.description(),
-                parsed_action.action_type(),
+                "我决定执行 {} 个操作:\n{}\n思考: {}",
+                parsed_actions.len(),
+                actions_summary.join("\n"),
                 reasoning_text
             );
             self.add_assistant_message(assistant_response).await;
 
             // 将操作结果格式化并添加为用户消息
-            let result_summary = if action_result.success {
-                format!(
-                    "操作结果（步骤 {}）:\n- 操作: {}\n- 状态: 成功\n- 详情: {}\n- 耗时: {}ms\n\n请分析当前屏幕并决定下一步操作。",
-                    step,
-                    parsed_action.action_type(),
-                    action_result.message,
-                    action_result.duration_ms
-                )
-            } else {
-                format!(
-                    "操作结果（步骤 {}）:\n- 操作: {}\n- 状态: 失败\n- 错误: {}\n- 耗时: {}ms\n\n请分析失败原因并决定下一步操作。",
-                    step,
-                    parsed_action.action_type(),
-                    action_result.message,
-                    action_result.duration_ms
-                )
-            };
+            let mut result_summary_parts = Vec::new();
+            for (idx, (action, result)) in parsed_actions.iter().zip(action_results.iter()).enumerate() {
+                let status = if result.success { "成功" } else { "失败" };
+                let detail = if result.success {
+                    format!("详情: {}", result.message)
+                } else {
+                    format!("错误: {}", result.message)
+                };
+                result_summary_parts.push(format!(
+                    "- 操作 #{}: {} ({})\n  状态: {}\n  {}\n  耗时: {}ms",
+                    idx + 1,
+                    action.action_type(),
+                    action.description(),
+                    status,
+                    detail,
+                    result.duration_ms
+                ));
+            }
+
+            let result_summary = format!(
+                "操作结果（步骤 {}）:\n{}\n\n请分析当前屏幕并决定下一步操作。",
+                step,
+                result_summary_parts.join("\n")
+            );
             self.add_user_message(result_summary).await;
 
             // 增加步数
             step = self.runtime.increment_step().await;
 
-            // 记录操作日志
+            // 记录操作日志（只记录第一个操作的日志，保持兼容性）
             use crate::agent::logger::{ActionResultLog, LogMessage};
-            let total_step_duration = query_duration + screenshot_duration + std::time::Duration::from_millis(action_result.duration_ms as u64);
+            if let (Some(first_action), Some(first_result)) = (parsed_actions.first(), action_results.first()) {
+                let total_step_duration = query_duration + screenshot_duration + std::time::Duration::from_millis(first_result.duration_ms as u64);
 
-            // 将消息转换为日志格式
-            let log_messages: Vec<LogMessage> = messages_for_log.iter().map(|msg| {
-                LogMessage {
-                    role: format!("{:?}", msg.role).to_lowercase(),
-                    content: msg.content.clone(),
+                // 将消息转换为日志格式
+                let log_messages: Vec<LogMessage> = messages_for_log.iter().map(|msg| {
+                    LogMessage {
+                        role: format!("{:?}", msg.role).to_lowercase(),
+                        content: msg.content.clone(),
+                    }
+                }).collect();
+
+                if let Err(e) = self.logger.log_action(
+                    step - 1, // 使用之前的 step（increment 之前）
+                    log_messages,
+                    Some(screenshot.clone()),
+                    model_response.content.clone(),
+                    model_response.reasoning.clone(),
+                    first_action.action_type(),
+                    serde_json::json!({}), // ActionEnum 没有 parameters 字段，使用空对象
+                    Some(ActionResultLog {
+                        success: first_result.success,
+                        message: first_result.message.clone(),
+                        duration_ms: first_result.duration_ms,
+                    }),
+                    model_response.tokens_used,
+                    total_step_duration.as_millis() as u64,
+                ).await {
+                    warn!("记录操作日志失败: {}", e);
                 }
-            }).collect();
-
-            if let Err(e) = self.logger.log_action(
-                step - 1, // 使用之前的 step（increment 之前）
-                log_messages,
-                Some(screenshot.clone()),
-                model_response.content.clone(),
-                model_response.reasoning.clone(),
-                parsed_action.action_type(),
-                serde_json::json!({}), // ActionEnum 没有 parameters 字段，使用空对象
-                Some(ActionResultLog {
-                    success: action_result.success,
-                    message: action_result.message.clone(),
-                    duration_ms: action_result.duration_ms,
-                }),
-                model_response.tokens_used,
-                total_step_duration.as_millis() as u64,
-            ).await {
-                warn!("记录操作日志失败: {}", e);
             }
 
             // 等待一段时间再继续

@@ -116,6 +116,10 @@ pub struct ModelConfig {
 
     /// 超时时间（秒）
     pub timeout: u64,
+
+    /// 辅助模型名称（可选，用于修正主模型输出）
+    /// 如果为 None，则使用 model_name 作为辅助模型
+    pub auxiliary_model_name: Option<String>,
 }
 
 impl Default for ModelConfig {
@@ -129,6 +133,7 @@ impl Default for ModelConfig {
             temperature: 0.0,
             top_p: 0.85,
             timeout: 30,
+            auxiliary_model_name: None,
         }
     }
 }
@@ -164,6 +169,7 @@ impl ModelConfig {
             temperature: 0.0,
             top_p: 0.85,
             timeout: 60,
+            auxiliary_model_name: None,
         }
     }
 
@@ -183,6 +189,7 @@ impl ModelConfig {
             temperature: 0.0,
             top_p: 0.85,
             timeout: 30,
+            auxiliary_model_name: None,
         }
     }
 }

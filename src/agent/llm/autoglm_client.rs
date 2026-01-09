@@ -3,91 +3,13 @@ use reqwest::Client;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn, error};
 use tokio_stream::StreamExt;
-use crate::agent::core::traits::{ModelClient, ModelResponse, ModelError, ModelInfo};
-use crate::agent::llm::types::{ChatRequest, ModelConfig};
+use crate::agent::core::traits::{ModelClient, ModelResponse, ModelError, ModelInfo, ChatMessage, MessageRole};
+use crate::agent::llm::types::{ChatRequest, ModelConfig, MessageContent, ChatMessage as ApiChatMessage, MessageRole as ApiMessageRole};
+use crate::agent::llm::prompts;
 use serde::{Deserialize, Serialize};
 
 // 导入 ActionEnum 用于解析响应
 use crate::agent::actions::base::ActionEnum;
-
-/// 获取系统提示词
-pub fn get_system_prompt(screen_width: u32, screen_height: u32) -> String {
-    let current_date = chrono::Local::now().format("%Y年%m月%d日").to_string();
-    format!(r#"#
-The current date:  {current_date}
-
-# Device Information
-- Screen Resolution: {screen_width}x{screen_height}
-- Screen Width: {screen_width} pixels
-- Screen Height: {screen_height} pixels
-
-# Setup
-You are a professional Android operation agent assistant that can fulfill the user's high-level instructions. Given a screenshot of the Android interface at each step, you first analyze the situation, then plan the best course of action using Python-style pseudo-code.
-
-# More details about the code
-Your response format must be structured as follows:
-
-Think first: Use <think>...</think> to analyze the current screen, identify key elements, and determine the most efficient action.
-Provide the action: Use <answer>...</answer> to return a single line of pseudo-code representing the operation.
-
-Your output should STRICTLY follow the format:
-<think>
-[Your thought]
-</think>
-<answer>
-[Your operation code]
-</answer>
-
-- **Tap**
-  Perform a tap action on a specified screen area. The element is a list of 2 integers, representing the coordinates of the tap point.
-  **Example**:
-  <answer>
-  do(action="Tap", element=[x,y])
-  </answer>
-- **Type**
-  Enter text into the currently focused input field.
-  **Example**:
-  <answer>
-  do(action="Type", text="Hello World")
-  </answer>
-- **Swipe**
-  Perform a swipe action with start point and end point.
-  **Examples**:
-  <answer>
-  do(action="Swipe", start=[x1,y1], end=[x2,y2])
-  </answer>
-- **Long Press**
-  Perform a long press action on a specified screen area.
-  You can add the element to the action to specify the long press area. The element is a list of 2 integers, representing the coordinates of the long press point.
-  **Example**:
-  <answer>
-  do(action="Long Press", element=[x,y])
-  </answer>
-- **Launch**
-  Launch an app. Try to use launch action when you need to launch an app. Check the instruction to choose the right app before you use this action.
-  **Example**:
-  <answer>
-  do(action="Launch", app="Settings")
-  </answer>
-- **Back**
-  Press the Back button to navigate to the previous screen.
-  **Example**:
-  <answer>
-  do(action="Back")
-  </answer>
-- **Finish**
-  Terminate the program and optionally print a message.
-  **Example**:
-  <answer>
-  finish(message="Task completed.")
-  </answer>
-
-
-REMEMBER:
-- Think before you act: Always analyze the current UI and the best course of action before executing any step, and output in <think> part.
-- Only ONE LINE of action in <answer> part per response: Each step must contain exactly one line of executable code.
-- Generate execution code strictly according to format requirements."#,)
-}
 
 /// AutoGLM 流式响应的增量数据
 #[derive(Debug, Deserialize)]
@@ -112,7 +34,11 @@ pub struct PerformanceMetrics {
 
 /// AutoGLM 客户端，支持流式响应和特殊标记解析
 pub struct AutoGLMClient {
+    /// 主客户端，用于主要操作决策
     client: Client,
+    /// 辅助客户端，用于修正和规范化主模型的输出
+    auxiliary_client: Client,
+    /// 模型配置
     config: ModelConfig,
 }
 
@@ -124,6 +50,13 @@ impl AutoGLMClient {
         info!("  超时时间: {}s", config.timeout);
         info!("  API Key: {}...", &config.api_key[..config.api_key.len().min(10)]);
 
+        // 显示辅助模型配置
+        if let Some(ref aux_name) = config.auxiliary_model_name {
+            info!("  辅助模型: {}", aux_name);
+        } else {
+            info!("  未配置辅助模型");
+        }
+
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout))
             .connect_timeout(Duration::from_secs(30))
@@ -132,7 +65,20 @@ impl AutoGLMClient {
             .build()
             .map_err(|e| ModelError::ApiError(format!("创建 HTTP 客户端失败: {}", e)))?;
 
-        Ok(Self { client, config })
+        // 创建辅助客户端（使用相同的配置）
+        let auxiliary_client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout))
+            .connect_timeout(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(120))
+            .tcp_keepalive(Duration::from_secs(600))
+            .build()
+            .map_err(|e| ModelError::ApiError(format!("创建辅助 HTTP 客户端失败: {}", e)))?;
+
+        Ok(Self {
+            client,
+            auxiliary_client,
+            config,
+        })
     }
 
     /// 发送流式聊天请求
@@ -202,7 +148,7 @@ impl AutoGLMClient {
         info!("  消息数: {}", request.messages.len());
 
         // 发送请求并处理错误
-        match self._send_request(&url, &request).await {
+        match self._send_request(&url, &request, &self.client, &self.config.api_key).await {
             Ok(response) => Ok(response),
             Err(e) => {
                 error!("AutoGLM 请求失败: {}", e);
@@ -216,7 +162,71 @@ impl AutoGLMClient {
         }
     }
 
-    async fn _send_request(&self, url: &str, request: &ChatRequest) -> Result<ChatResponse, ModelError> {
+    /// 使用辅助模型发送请求以修正响应
+    async fn send_auxiliary_request(&self, original_content: &str) -> Result<String, ModelError> {
+        // 如果没有配置辅助模型名称，直接返回原始内容
+        let aux_model_name = match &self.config.auxiliary_model_name {
+            Some(name) => name,
+            None => {
+                debug!("未配置辅助模型，跳过响应修正");
+                return Ok(original_content.to_string());
+            }
+        };
+
+        info!("使用辅助模型修正响应: {}", aux_model_name);
+
+        let url = format!("{}/chat/completions", self.config.base_url);
+
+        // 构建辅助模型请求
+        let system_prompt = prompts::get_auxiliary_system_prompt();
+        let user_message = format!("请修正以下输出，使其符合格式要求：\n\n{}", original_content);
+
+        let api_messages = vec![
+            ApiChatMessage {
+                role: ApiMessageRole::System,
+                content: MessageContent::Text(system_prompt),
+            },
+            ApiChatMessage {
+                role: ApiMessageRole::User,
+                content: MessageContent::Text(user_message),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: aux_model_name.clone(),
+            messages: api_messages,
+            max_tokens: Some(2048),
+            temperature: Some(0.0),
+            top_p: Some(0.85),
+            stream: Some(false),
+        };
+
+        let chat_response = self._send_request(&url, &request, &self.auxiliary_client, &self.config.api_key).await?;
+
+        // 提取修正后的内容
+        let choice = chat_response.choices.first().ok_or_else(|| {
+            ModelError::ParseError("辅助模型响应中没有选择项".to_string())
+        })?;
+
+        let corrected_content = match &choice.message.content {
+            MessageContent::Text(text) => text.clone(),
+            _ => original_content.to_string(),
+        };
+
+        info!("辅助模型修正完成");
+        debug!("原始内容: {}", original_content);
+        debug!("修正后内容: {}", corrected_content);
+
+        Ok(corrected_content)
+    }
+
+    async fn _send_request(
+        &self,
+        url: &str,
+        request: &ChatRequest,
+        client: &Client,
+        api_key: &str,
+    ) -> Result<ChatResponse, ModelError> {
         // 打印请求详情（选择性输出，过滤图片数据）
         info!("========== AutoGLM 请求 ==========");
         info!("URL: {}", url);
@@ -226,10 +236,9 @@ impl AutoGLMClient {
         info!("消息数量: {}", request.messages.len());
         info!("================================");
 
-        let response = self
-            .client
+        let response = client
             .post(url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(request)
             .send()
@@ -313,7 +322,7 @@ impl AutoGLMClient {
     }
 
     /// 解析 AutoGLM 响应（使用 ActionEnum 的通用解析方法）
-    fn parse_response(&self, content: &str) -> (Option<String>, Option<ActionEnum>) {
+    fn parse_response(&self, content: &str) -> (Option<String>, Vec<ActionEnum>) {
         ActionEnum::parse_from_response(content)
     }
 }
@@ -322,7 +331,7 @@ impl AutoGLMClient {
 impl ModelClient for AutoGLMClient {
     async fn query_with_messages(
         &self,
-        messages: Vec<crate::agent::core::traits::ChatMessage>,
+        messages: Vec<ChatMessage>,
         screenshot: Option<&str>,
     ) -> Result<ModelResponse, ModelError> {
         debug!("查询 AutoGLM，消息数量: {}", messages.len());
@@ -334,27 +343,21 @@ impl ModelClient for AutoGLMClient {
 
         // 找到最后一条用户消息的索引（用于添加截图）
         let last_user_msg_index = messages.iter().rposition(|msg| {
-            matches!(msg.role, crate::agent::core::traits::MessageRole::User)
+            matches!(msg.role, MessageRole::User)
         });
 
         for (idx, msg) in messages.iter().enumerate() {
             let role = match msg.role {
-                crate::agent::core::traits::MessageRole::System => {
-                    crate::agent::llm::types::MessageRole::System
-                }
-                crate::agent::core::traits::MessageRole::User => {
-                    crate::agent::llm::types::MessageRole::User
-                }
-                crate::agent::core::traits::MessageRole::Assistant => {
-                    crate::agent::llm::types::MessageRole::Assistant
-                }
+                MessageRole::System => ApiMessageRole::System,
+                MessageRole::User => ApiMessageRole::User,
+                MessageRole::Assistant => ApiMessageRole::Assistant,
             };
 
             // 只在最后一条用户消息中添加截图
             let is_last_user_msg = last_user_msg_index == Some(idx);
 
             let content = if is_last_user_msg && screenshot.is_some() {
-                crate::agent::llm::types::MessageContent::Multimodal(vec![
+                MessageContent::Multimodal(vec![
                     crate::agent::llm::types::ContentBlock {
                         block_type: "image_url".to_string(),
                         text: None,
@@ -367,10 +370,10 @@ impl ModelClient for AutoGLMClient {
                     },
                 ])
             } else {
-                crate::agent::llm::types::MessageContent::Text(msg.content.clone())
+                MessageContent::Text(msg.content.clone())
             };
 
-            api_messages.push(crate::agent::llm::types::ChatMessage { role, content });
+            api_messages.push(ApiChatMessage { role, content });
         }
 
         // 构建请求
@@ -391,15 +394,29 @@ impl ModelClient for AutoGLMClient {
             ModelError::ParseError("响应中没有选择项".to_string())
         })?;
 
-        let content = match &choice.message.content {
-            crate::agent::llm::types::MessageContent::Text(text) => text.clone(),
+        let mut content = match &choice.message.content {
+            MessageContent::Text(text) => text.clone(),
             _ => "".to_string(),
         };
+
+        // 使用辅助模型优化响应（如果配置了辅助模型名称）
+        if self.config.auxiliary_model_name.is_some() {
+            info!("主模型响应无法解析，使用辅助模型修正");
+            match self.send_auxiliary_request(&content).await {
+                Ok(corrected_content) => {
+                    content = corrected_content;
+                },
+                Err(e) => {
+                    warn!("辅助模型修正失败: {}, 使用原始响应", e);
+                    // 继续使用原始响应
+                }
+            }
+        }
 
         let total_time = start_time.elapsed().as_secs_f64();
 
         // 使用 AutoGLM 特殊解析
-        let (thinking, parsed_action) = self.parse_response(&content);
+        let (thinking, parsed_actions) = self.parse_response(&content);
 
         let usage = chat_response.usage.unwrap_or(Usage {
             prompt_tokens: 0,
@@ -414,11 +431,12 @@ impl ModelClient for AutoGLMClient {
         if let Some(ref t) = thinking {
             info!("   思考过程: {}", t);
         }
+        info!("   解析到的操作数: {}", parsed_actions.len());
         info!("   完整响应: {}", &content);
 
         Ok(ModelResponse {
             content: content.clone(),
-            action: parsed_action,
+            actions: parsed_actions,
             confidence: 0.8,
             reasoning: thinking,
             tokens_used: usage.total_tokens,
@@ -450,7 +468,7 @@ pub struct ChatResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Choice {
     pub index: usize,
-    pub message: crate::agent::llm::types::ChatMessage,
+    pub message: ApiChatMessage,
     pub finish_reason: Option<String>,
 }
 
@@ -472,12 +490,13 @@ mod tests {
         let response = r#"Thinking...
 finish(message="Task completed successfully")"#;
 
-        let (thinking, action) = client.parse_response(response);
+        let (thinking, actions) = client.parse_response(response);
 
         // 验证 action 解析成功
-        assert!(action.is_some());
+        assert!(!actions.is_empty());
+        assert_eq!(actions.len(), 1);
         // 验证 action 类型为 FinishAction
-        assert_eq!(action.as_ref().unwrap().action_type(), "finish");
+        assert_eq!(actions[0].action_type(), "finish");
         // thinking 可能是 None（因为没有 <thinking> 标签）
         assert!(thinking.is_none() || thinking.as_ref().unwrap() == "Thinking...");
     }
@@ -488,15 +507,16 @@ finish(message="Task completed successfully")"#;
         let response = r#"Analyzing screen...
 do(action="Tap", element=[500, 800])"#;
 
-        let (thinking, action) = client.parse_response(response);
+        let (thinking, actions) = client.parse_response(response);
 
         // 验证 thinking 部分（应该是 None，因为没有 <thinking> 标签）
         assert!(thinking.is_none());
 
         // 验证 action 解析成功
-        assert!(action.is_some());
+        assert!(!actions.is_empty());
+        assert_eq!(actions.len(), 1);
         // 验证 action 类型为 TapAction
-        assert_eq!(action.as_ref().unwrap().action_type(), "tap");
+        assert_eq!(actions[0].action_type(), "tap");
     }
 
     #[test]
@@ -505,15 +525,16 @@ do(action="Tap", element=[500, 800])"#;
         let response = r#"<thinking>I should tap the button at coordinates 100, 200</thinking>
 do(action="Tap", element=[100, 200])"#;
 
-        let (thinking, action) = client.parse_response(response);
+        let (thinking, actions) = client.parse_response(response);
 
         // 验证 thinking 部分（从 <thinking> 标签提取）
         assert_eq!(thinking, Some("I should tap the button at coordinates 100, 200".to_string()));
 
         // 验证 action 解析成功
-        assert!(action.is_some());
+        assert!(!actions.is_empty());
+        assert_eq!(actions.len(), 1);
         // 验证 action 类型为 TapAction
-        assert_eq!(action.as_ref().unwrap().action_type(), "tap");
+        assert_eq!(actions[0].action_type(), "tap");
     }
 
     #[test]
@@ -521,11 +542,11 @@ do(action="Tap", element=[100, 200])"#;
         let client = AutoGLMClient::new(ModelConfig::default()).unwrap();
         let response = r#"Some random text without markers"#;
 
-        let (thinking, action) = client.parse_response(response);
+        let (thinking, actions) = client.parse_response(response);
 
-        // thinking 应该为 None（没有 <thinking> 标签），action 应该为 None
+        // thinking 应该为 None（没有 <thinking> 标签），actions 应该为空
         assert!(thinking.is_none());
-        assert!(action.is_none());
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -536,19 +557,21 @@ do(action="Tap", element=[100, 200])"#;
         let response1 = r#"Text...
 do(action=tap)
 finish(message="done")"#;
-        let (thinking, action) = client.parse_response(response1);
+        let (thinking, actions) = client.parse_response(response1);
         // thinking 应该是 None（没有 <thinking> 标签）
         assert!(thinking.is_none());
-        assert_eq!(action.unwrap().action_type(), "finish");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action_type(), "finish");
 
         // do(action= 第二优先级
         let response2 = r#"<thinking>Thought</thinking>
 <answer>answer content</answer>
 do(action="Launch", app="微信")"#;
-        let (thinking, action) = client.parse_response(response2);
+        let (thinking, actions) = client.parse_response(response2);
         // thinking 应该是 Some("Thought")
         assert_eq!(thinking, Some("Thought".to_string()));
-        assert_eq!(action.unwrap().action_type(), "launch");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action_type(), "launch");
     }
 
     #[test]
@@ -558,16 +581,16 @@ do(action="Launch", app="微信")"#;
 do(action="Launch", app="微信")"#;
 
         println!("Testing response: {:?}", response);
-        let (thinking, action) = client.parse_response(response);
+        let (thinking, actions) = client.parse_response(response);
 
         println!("Got thinking: {:?}", thinking);
-        println!("Got action: {:?}", action);
+        println!("Got actions: {:?}", actions);
 
         // thinking 应该是 None（因为没有 <thinking> 标签）
         assert!(thinking.is_none());
-        assert!(action.is_some());
+        assert!(!actions.is_empty());
         // 验证 action 类型为 LaunchAction
-        assert_eq!(action.as_ref().unwrap().action_type(), "launch");
+        assert_eq!(actions[0].action_type(), "launch");
     }
 
     #[test]
@@ -576,13 +599,13 @@ do(action="Launch", app="微信")"#;
         let response = r#"应用正在加载中
 do(action="Wait", duration=1, message="应用正在加载中，请稍等。")"#;
 
-        let (thinking, action) = client.parse_response(response);
+        let (thinking, actions) = client.parse_response(response);
 
         // thinking 应该是 None（没有 <thinking> 标签）
         assert!(thinking.is_none());
-        assert!(action.is_some());
+        assert!(!actions.is_empty());
         // 验证 action 类型为 WaitAction
-        assert_eq!(action.as_ref().unwrap().action_type(), "wait");
+        assert_eq!(actions[0].action_type(), "wait");
     }
 
     #[test]
@@ -596,16 +619,16 @@ do(action="Wait", duration=1, message="应用正在加载中，请稍等。")"#;
 
 您想打开哪个应用来浏览？")"#;
 
-        let (thinking, action) = client.parse_response(response);
+        let (thinking, actions) = client.parse_response(response);
 
         // thinking 应该是 None（没有 <thinking> 标签）
         assert!(thinking.is_none());
-        assert!(action.is_some());
+        assert!(!actions.is_empty());
         // 验证 action 类型为 FinishAction
-        assert_eq!(action.as_ref().unwrap().action_type(), "finish");
+        assert_eq!(actions[0].action_type(), "finish");
 
         // 验证多行消息被正确解析
-        if let Some(ActionEnum::Finish(finish)) = action {
+        if let ActionEnum::Finish(ref finish) = actions[0] {
             assert!(finish.result.contains("抱歉，我无法找到"));
             assert!(finish.result.contains("什么值得买"));
             assert!(finish.result.contains("淘宝"));

@@ -109,6 +109,55 @@ impl ActionHandler {
         self.execute_with_retry(action).await
     }
 
+    /// 串行执行多个操作
+    /// 返回所有操作的执行结果列表
+    /// 即使某个操作失败，也会继续执行后续操作
+    pub async fn execute_multiple_actions(
+        &self,
+        actions: &[ActionEnum],
+    ) -> Vec<ActionResult> {
+        info!("开始执行 {} 个操作", actions.len());
+
+        let mut results = Vec::with_capacity(actions.len());
+
+        for (idx, action) in actions.iter().enumerate() {
+            info!("执行操作 {}/{}", idx + 1, actions.len());
+            info!("  操作类型: {}", action.action_type());
+            info!("  操作描述: {}", action.description());
+
+            // 验证操作
+            let validation_result = action.validate();
+            if let Err(e) = validation_result {
+                warn!("操作 #{} 验证失败: {}", idx + 1, e);
+                results.push(ActionResult::failure(
+                    format!("操作验证失败: {}", e),
+                    0
+                ));
+                continue;
+            }
+
+            // 执行操作
+            match self.execute_with_retry(action).await {
+                Ok(result) => {
+                    info!("操作 #{} 执行成功: {}", idx + 1, result.message);
+                    results.push(result);
+                }
+                Err(e) => {
+                    warn!("操作 #{} 执行失败: {}", idx + 1, e);
+                    results.push(ActionResult::failure(
+                        format!("{}", e),
+                        0
+                    ));
+                }
+            }
+        }
+
+        let success_count = results.iter().filter(|r| r.success).count();
+        info!("执行完成: {}/{} 成功", success_count, actions.len());
+
+        results
+    }
+
     /// 转换 Action 参数格式
     /// 将提示词中的参数格式转换为 Action 结构体需要的格式
     fn convert_action_params(

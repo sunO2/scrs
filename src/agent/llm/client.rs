@@ -154,14 +154,14 @@ impl ModelClient for OpenAIClient {
             total_tokens: 0,
         });
 
-        // 解析操作（目前返回 None，因为 GPT 客户端暂不使用）
+        // 解析操作（目前返回空 Vec，因为 GPT 客户端暂不使用）
         // TODO: 实现 ParsedAction 到 ActionEnum 的转换
         let _action = parse_action_from_response(&content)?;
-        let action = None;
+        let actions = Vec::new();
 
         Ok(ModelResponse {
             content: content.clone(),
-            action,
+            actions,
             confidence: 0.8,
             reasoning: None,
             tokens_used: usage.total_tokens,

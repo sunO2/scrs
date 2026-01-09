@@ -43,9 +43,14 @@ pub enum ActionEnum {
 impl ActionEnum {
     /// 解析 LLM 响应中的操作
     /// 支持两种格式：
-    /// 1. `finish(...)` - 任务完成，括号内是消息
-    /// 2. `do(...)` - 执行操作，括号内是 `action="...", key=value` 格式
-    pub fn parse_from_response(content: &str) -> (Option<String>, Option<Self>) {
+    /// 1. `finish(...)` - 任务完成，括号内是消息（最高优先级，单个）
+    /// 2. `do(...)` - 执行操作，括号内是 `action="...", key=value` 格式（支持多个）
+    ///
+    /// 返回格式：
+    /// - 如果有 finish(...)，返回 (Some(thinking), vec![finish_action])
+    /// - 如果有多个 do(...)，返回 (Some(thinking), vec![action1, action2, ...])
+    /// - 如果都没有，返回 (Some(thinking), vec![])
+    pub fn parse_from_response(content: &str) -> (Option<String>, Vec<Self>) {
         use regex::Regex;
         use tracing::{debug, info, warn};
 
@@ -97,23 +102,29 @@ impl ActionEnum {
                     .to_string();
 
                 info!("✅ 解析成功: finish action with message='{}'", message);
-                return (thinking, Some(ActionEnum::Finish(FinishAction {
+                return (thinking, vec![ActionEnum::Finish(FinishAction {
                     result: message,
                     success: true,
-                })));
+                })]);
             }
         }
 
-        // 规则 2: 检查 do(...)
-        // 手动查找匹配的括号，避免正则表达式的问题
-        debug!("🔍 检查 do(...) 模式");
-        if let Some(start_pos) = content.find("do(") {
+        // 规则 2: 检查多个 do(...)
+        // 查找所有 do(...) 模式
+        debug!("🔍 检查 do(...) 模式（支持多个）");
+        let mut actions = Vec::new();
+        let mut search_start = 0;
+
+        while let Some(start_pos) = content[search_start..].find("do(") {
+            let actual_start = search_start + start_pos;
+
+            // 手动查找匹配的括号
             let mut bracket_count = 0;
             let mut in_brackets = false;
-            let mut end_pos = start_pos + 2; // 跳过 "do"
+            let mut end_pos = actual_start + 2; // 跳过 "do"
 
-            for (i, c) in content[start_pos + 2..].char_indices() {
-                let actual_i = start_pos + 2 + i;
+            for (i, c) in content[actual_start + 2..].char_indices() {
+                let actual_i = actual_start + 2 + i;
                 if c == '(' {
                     bracket_count += 1;
                     in_brackets = true;
@@ -126,27 +137,38 @@ impl ActionEnum {
                 }
             }
 
-            if end_pos > start_pos + 2 {
-                let params_str = content[start_pos + 3..end_pos].trim();
-                debug!("✅ 匹配到 do(...) 模式");
+            if end_pos > actual_start + 2 {
+                let params_str = content[actual_start + 3..end_pos].trim();
+                debug!("✅ 匹配到 do(...) 模式 #{}", actions.len() + 1);
                 debug!("🔧 参数字符串: {}", params_str);
 
                 // 解析参数
                 match Self::parse_do_params(params_str) {
                     Some(action) => {
-                        info!("✅ 解析成功: {} action", action.action_type());
-                        return (thinking, Some(action));
+                        info!("✅ 解析成功 #{}: {} action", actions.len() + 1, action.action_type());
+                        actions.push(action);
                     }
                     None => {
-                        warn!("⚠️  do(...) 参数解析失败: {}", params_str);
+                        warn!("⚠️  do(...) #{} 参数解析失败: {}", actions.len() + 1, params_str);
                     }
                 }
+
+                // 移动到下一个位置继续搜索
+                search_start = end_pos + 1;
+            } else {
+                // 没有找到匹配的括号，停止搜索
+                break;
             }
         }
 
+        if !actions.is_empty() {
+            info!("✅ 总共解析到 {} 个 do(...) 操作", actions.len());
+            return (thinking, actions);
+        }
+
         warn!("❌ 无法解析响应内容，没有匹配到 finish() 或 do() 模式");
-        // 如果没有找到匹配，返回 None
-        (thinking, None)
+        // 如果没有找到匹配，返回空 Vec
+        (thinking, vec![])
     }
 
     /// 解析 do() 括号内的参数

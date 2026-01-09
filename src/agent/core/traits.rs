@@ -272,7 +272,7 @@ pub enum MessageRole {
 #[derive(Debug, Clone)]
 pub struct ModelResponse {
     pub content: String,
-    pub action: Option<crate::agent::actions::base::ActionEnum>,
+    pub actions: Vec<crate::agent::actions::base::ActionEnum>,
     pub confidence: f32,
     pub reasoning: Option<String>,
     pub tokens_used: u32,
