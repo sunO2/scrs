@@ -38,6 +38,9 @@ impl PhoneAgent {
         let logger = Arc::new(AgentLogger::new(&id, log_dir)
             .map_err(|e| AppError::Unknown(format!("创建日志记录器失败: {}", e)))?);
 
+        // 将 logger 传递给 model_client
+        model_client.set_logger(Some(logger.clone()));
+
         Ok(Self {
             id,
             device,
@@ -103,13 +106,21 @@ impl PhoneAgent {
             }
         };
 
-        // 初始化消息列表（添加系统提示词和用户任务）
-        let system_prompt = crate::agent::llm::prompts::get_main_system_prompt(screen_width, screen_height);
+        // 初始化消息列表（根据模式选择系统提示词）
+        let system_prompt = if self.model_client.supports_three_stage() {
+            // 三阶段模式：使用规划提示词
+            info!("使用三阶段模式，初始化为规划阶段");
+            crate::agent::llm::prompts::get_planning_system_prompt()
+        } else {
+            // 单阶段模式：使用主提示词（小模型直接分析截图并执行）
+            info!("使用单阶段模式，初始化为执行模式");
+            crate::agent::llm::prompts::get_main_system_prompt(screen_width, screen_height)
+        };
         self.initialize_messages(system_prompt).await;
 
         // 添加初始用户任务
         let initial_user_message = format!(
-            "任务: {}\n\n 请分析当前屏幕并决定 需要怎么操作。告诉我的操作尽量简洁 并且需要严格按照do(action= 格式回复 否则我无法解析",
+            "任务: {}",
             task
         );
         self.add_user_message(initial_user_message.clone()).await;
@@ -310,7 +321,7 @@ impl PhoneAgent {
             }
 
             let result_summary = format!(
-                "操作结果（步骤 {}）:\n{}\n\n请分析当前屏幕并决定下一步操作。",
+                "操作结果（步骤 {}）:\n{}",
                 step,
                 result_summary_parts.join("\n")
             );
@@ -318,39 +329,6 @@ impl PhoneAgent {
 
             // 增加步数
             step = self.runtime.increment_step().await;
-
-            // 记录操作日志（只记录第一个操作的日志，保持兼容性）
-            use crate::agent::logger::{ActionResultLog, LogMessage};
-            if let (Some(first_action), Some(first_result)) = (parsed_actions.first(), action_results.first()) {
-                let total_step_duration = query_duration + screenshot_duration + std::time::Duration::from_millis(first_result.duration_ms as u64);
-
-                // 将消息转换为日志格式
-                let log_messages: Vec<LogMessage> = messages_for_log.iter().map(|msg| {
-                    LogMessage {
-                        role: format!("{:?}", msg.role).to_lowercase(),
-                        content: msg.content.clone(),
-                    }
-                }).collect();
-
-                if let Err(e) = self.logger.log_action(
-                    step - 1, // 使用之前的 step（increment 之前）
-                    log_messages,
-                    Some(screenshot.clone()),
-                    model_response.content.clone(),
-                    model_response.reasoning.clone(),
-                    first_action.action_type(),
-                    serde_json::json!({}), // ActionEnum 没有 parameters 字段，使用空对象
-                    Some(ActionResultLog {
-                        success: first_result.success,
-                        message: first_result.message.clone(),
-                        duration_ms: first_result.duration_ms,
-                    }),
-                    model_response.tokens_used,
-                    total_step_duration.as_millis() as u64,
-                ).await {
-                    warn!("记录操作日志失败: {}", e);
-                }
-            }
 
             // 等待一段时间再继续
             tokio::time::sleep(std::time::Duration::from_millis(

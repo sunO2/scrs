@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use reqwest::Client;
 use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn, error};
 use tokio_stream::StreamExt;
 use crate::agent::core::traits::{ModelClient, ModelResponse, ModelError, ModelInfo, ChatMessage, MessageRole};
 use crate::agent::llm::types::{ChatRequest, ModelConfig, MessageContent, ChatMessage as ApiChatMessage, MessageRole as ApiMessageRole};
 use crate::agent::llm::prompts;
+use crate::agent::logger::{AgentLogger, LogMessage};
 use serde::{Deserialize, Serialize};
 
 // 导入 ActionEnum 用于解析响应
@@ -40,6 +43,8 @@ pub struct AutoGLMClient {
     auxiliary_client: Client,
     /// 模型配置
     config: ModelConfig,
+    /// 日志记录器（使用 std::sync::Mutex 以支持同步访问）
+    logger: Arc<StdMutex<Option<Arc<AgentLogger>>>>,
 }
 
 impl AutoGLMClient {
@@ -78,7 +83,34 @@ impl AutoGLMClient {
             client,
             auxiliary_client,
             config,
+            logger: Arc::new(StdMutex::new(None)),
         })
+    }
+
+    /// 记录 API 对话到日志文件
+    async fn log_api_call(
+        &self,
+        stage: &str,
+        messages: Vec<LogMessage>,
+        model_response: &str,
+        duration_ms: u64,
+    ) {
+        // 克隆 logger 引用以避免在 await 时持有锁
+        let logger = self.logger.lock().unwrap().clone();
+        if let Some(logger) = logger {
+            let _ = logger.log_action(
+                0, // step_number
+                messages,
+                None, // screenshot
+                model_response.to_string(), // 直接记录原始响应
+                None, // thinking
+                stage.to_string(),
+                serde_json::json!({ "duration_ms": duration_ms }),
+                None, // action_result
+                0, // tokens_used
+                duration_ms,
+            ).await;
+        }
     }
 
     /// 发送流式聊天请求
@@ -325,6 +357,242 @@ impl AutoGLMClient {
     fn parse_response(&self, content: &str) -> (Option<String>, Vec<ActionEnum>) {
         ActionEnum::parse_from_response(content)
     }
+
+    /// 阶段1: 大模型规划动作
+    /// 用于三阶段模式，大模型作为提问者，向执行助手提出操作请求（不需要截图）
+    async fn plan_action(
+        &self,
+        messages: Vec<ChatMessage>,
+    ) -> Result<String, ModelError> {
+        let planning_model = self.config.planning_model_name
+            .as_ref()
+            .or(self.config.auxiliary_model_name.as_ref())
+            .ok_or_else(|| ModelError::ApiError("未配置规划模型".to_string()))?;
+
+        info!("=== 阶段1: 大模型规划（提问者） ===");
+        info!("使用模型: {}", planning_model);
+
+        let start_time = Instant::now();
+
+        // 转换对话历史（agent.rs 已经包含了系统提示词，不需要再添加）
+        let api_messages: Vec<ApiChatMessage> = messages.iter().map(|msg| {
+            let role = match msg.role {
+                MessageRole::System => ApiMessageRole::System,
+                MessageRole::User => ApiMessageRole::User,
+                MessageRole::Assistant => ApiMessageRole::Assistant,
+            };
+
+            ApiChatMessage {
+                role,
+                content: MessageContent::Text(msg.content.clone()),
+            }
+        }).collect();
+
+        let request = ChatRequest {
+            model: planning_model.to_string(),
+            messages: api_messages.clone(),
+            max_tokens: Some(1024),
+            temperature: Some(0.3),
+            top_p: Some(0.1),
+            stream: Some(false),
+        };
+
+        let chat_response = self._send_request(
+            &format!("{}/chat/completions", self.config.base_url),
+            &request,
+            &self.client,
+            &self.config.api_key
+        ).await?;
+
+        let choice = chat_response.choices.first().ok_or_else(|| {
+            ModelError::ParseError("规划模型响应中没有选择项".to_string())
+        })?;
+
+        let planning_output = match &choice.message.content {
+            MessageContent::Text(text) => text.clone(),
+            _ => return Err(ModelError::ParseError("规划模型输出格式错误".to_string())),
+        };
+
+        let duration = start_time.elapsed().as_millis() as u64;
+        info!("规划请求: {} (耗时: {}ms)", planning_output, duration);
+
+        // 记录到日志文件（对话格式）
+        let log_messages: Vec<LogMessage> = api_messages.iter().map(|msg| {
+            LogMessage {
+                role: format!("{:?}", msg.role).to_lowercase(),
+                content: match &msg.content {
+                    MessageContent::Text(text) => text.clone(),
+                    _ => "".to_string(),
+                },
+            }
+        }).collect();
+
+        self.log_api_call(
+            "planning",
+            log_messages,
+            &planning_output,
+            duration,
+        ).await;
+
+        Ok(planning_output)
+    }
+
+    /// 阶段2: 小模型生成具体动作
+    /// 用于三阶段模式，小模型根据动作描述生成具体执行参数
+    async fn execute_plan(
+        &self,
+        action_description: &str,
+        screenshot: &str,
+        screen_width: u32,
+        screen_height: u32,
+    ) -> Result<String, ModelError> {
+        let execution_model = self.config.execution_model_name
+            .as_ref()
+            .unwrap_or(&self.config.model_name);
+
+        info!("=== 阶段2: 小模型执行 ===");
+        info!("使用模型: {}", execution_model);
+        info!("动作描述: {}", action_description);
+
+        let start_time = Instant::now();
+
+        // 构建执行请求（只给描述+截图，不给历史）
+        let system_prompt = prompts::get_execution_system_prompt(screen_width, screen_height);
+        let user_message = format!(
+            "{}\n\n请根据当前截图和上述动作描述生成具体的执行参数。",
+            action_description
+        );
+
+        let api_messages = vec![
+            ApiChatMessage {
+                role: ApiMessageRole::System,
+                content: MessageContent::Text(system_prompt),
+            },
+            ApiChatMessage {
+                role: ApiMessageRole::User,
+                content: MessageContent::Multimodal(vec![
+                    crate::agent::llm::types::ContentBlock {
+                        block_type: "image_url".to_string(),
+                        text: None,
+                        image_url: Some(crate::agent::llm::types::ImageUrl::from_base64(screenshot)),
+                    },
+                    crate::agent::llm::types::ContentBlock {
+                        block_type: "text".to_string(),
+                        text: Some(user_message.clone()),
+                        image_url: None,
+                    },
+                ]),
+            },
+        ];
+
+        let request = ChatRequest {
+            model: execution_model.to_string(),
+            messages: api_messages.clone(),
+            max_tokens: Some(2048),
+            temperature: Some(0.1),
+            top_p: Some(0.1),
+            stream: Some(false),
+        };
+
+        let chat_response = self._send_request(
+            &format!("{}/chat/completions", self.config.base_url),
+            &request,
+            &self.client,
+            &self.config.api_key
+        ).await?;
+
+        let choice = chat_response.choices.first().ok_or_else(|| {
+            ModelError::ParseError("执行模型响应中没有选择项".to_string())
+        })?;
+
+        let execution_output = match &choice.message.content {
+            MessageContent::Text(text) => text.clone(),
+            _ => return Err(ModelError::ParseError("执行模型输出格式错误".to_string())),
+        };
+
+        let duration = start_time.elapsed().as_millis() as u64;
+        info!("执行输出: {} (耗时: {}ms)", execution_output, duration);
+
+        // 记录到日志文件（对话格式）
+        let log_messages = vec![
+            LogMessage {
+                role: "system".to_string(),
+                content: "[系统提示词已省略]".to_string(),
+            },
+            LogMessage {
+                role: "user".to_string(),
+                content: user_message,
+            },
+        ];
+
+        self.log_api_call(
+            "execution",
+            log_messages,
+            &execution_output,
+            duration,
+        ).await;
+
+        Ok(execution_output)
+    }
+
+    /// 内部三阶段处理
+    /// 完整的三阶段流程：大模型规划(提问) -> 小模型执行(答题) -> 大模型修正
+    async fn process_three_stage_internal(
+        &self,
+        messages: Vec<ChatMessage>,
+        screenshot: &str,
+        screen_width: u32,
+        screen_height: u32,
+    ) -> Result<ModelResponse, ModelError> {
+        let start_time = Instant::now();
+
+        // 阶段1: 大模型规划（不需要截图，作为提问者）
+        let planning_request = self.plan_action(messages.clone()).await?;
+        info!("规划结果: {}", planning_request);
+
+        // 阶段2: 小模型执行（需要截图，作为答题者）
+        let mut content = self.execute_plan(
+            &planning_request,
+            screenshot,
+            screen_width,
+            screen_height
+        ).await?;
+
+        // 尝试解析
+        let (thinking, parsed_actions) = self.parse_response(&content);
+
+        // 阶段3: 大模型修正（如果解析失败）
+        if parsed_actions.is_empty() {
+            info!("解析失败，进入阶段3: 大模型修正");
+            match self.send_auxiliary_request(&content).await {
+                Ok(corrected_content) => {
+                    content = corrected_content;
+                    info!("修正完成");
+                },
+                Err(e) => {
+                    error!("修正失败: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+
+        let total_time = start_time.elapsed().as_secs_f64();
+
+        // 最终解析
+        let (thinking, parsed_actions) = self.parse_response(&content);
+
+        info!("📊 三阶段性能指标:");
+        info!("   总推理时间: {:.3}s", total_time);
+        info!("   解析到的操作数: {}", parsed_actions.len());
+
+        Ok(ModelResponse {
+            content,
+            actions: parsed_actions,
+            confidence: 0.8,
+            reasoning: thinking,
+            tokens_used: 0, // 三阶段模式需要单独计算
+        })
+    }
 }
 
 #[async_trait]
@@ -336,6 +604,27 @@ impl ModelClient for AutoGLMClient {
     ) -> Result<ModelResponse, ModelError> {
         debug!("查询 AutoGLM，消息数量: {}", messages.len());
 
+        // 如果启用三阶段模式，使用三阶段流程
+        if self.config.enable_three_stage {
+            let screenshot = screenshot.ok_or_else(|| {
+                ModelError::ParseError("三阶段模式需要截图".to_string())
+            })?;
+
+            // TODO: 从设备获取屏幕尺寸，这里先使用固定值
+            // 后续可以通过参数传入或从配置读取
+            let screen_width = 1080;
+            let screen_height = 2400;
+
+            info!("启用三阶段模式");
+            return self.process_three_stage_internal(
+                messages,
+                screenshot,
+                screen_width,
+                screen_height
+            ).await;
+        }
+
+        // 否则使用原有的单阶段流程
         let start_time = Instant::now();
 
         // 转换消息格式
@@ -451,6 +740,15 @@ impl ModelClient for AutoGLMClient {
             max_tokens: self.config.max_tokens,
             context_window: 8192, // AutoGLM-Phone-9B 的上下文窗口
         }
+    }
+
+    fn supports_three_stage(&self) -> bool {
+        self.config.enable_three_stage
+    }
+
+    fn set_logger(&self, logger: Option<std::sync::Arc<AgentLogger>>) {
+        let mut logger_guard = self.logger.lock().unwrap();
+        *logger_guard = logger;
     }
 }
 

@@ -177,6 +177,10 @@ impl ModelClient for OpenAIClient {
             context_window: 128000, // GPT-4o 的上下文窗口
         }
     }
+
+    fn set_logger(&self, _logger: Option<std::sync::Arc<crate::agent::logger::AgentLogger>>) {
+        // OpenAI 客户端暂不使用日志记录
+    }
 }
 
 #[cfg(test)]

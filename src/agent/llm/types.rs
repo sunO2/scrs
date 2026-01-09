@@ -120,6 +120,18 @@ pub struct ModelConfig {
     /// 辅助模型名称（可选，用于修正主模型输出）
     /// 如果为 None，则使用 model_name 作为辅助模型
     pub auxiliary_model_name: Option<String>,
+
+    /// 规划模型名称（可选，用于三阶段模式的规划阶段）
+    /// 如果为 None，则使用 auxiliary_model_name 作为规划模型
+    pub planning_model_name: Option<String>,
+
+    /// 执行模型名称（可选，用于三阶段模式的执行阶段）
+    /// 如果为 None，则使用 model_name 作为执行模型
+    pub execution_model_name: Option<String>,
+
+    /// 是否启用三阶段模式
+    /// 启用后，使用大模型规划，小模型执行，大模型修正的三阶段流程
+    pub enable_three_stage: bool,
 }
 
 impl Default for ModelConfig {
@@ -134,6 +146,9 @@ impl Default for ModelConfig {
             top_p: 0.85,
             timeout: 30,
             auxiliary_model_name: None,
+            planning_model_name: None,
+            execution_model_name: None,
+            enable_three_stage: false,
         }
     }
 }
@@ -170,6 +185,9 @@ impl ModelConfig {
             top_p: 0.85,
             timeout: 60,
             auxiliary_model_name: None,
+            planning_model_name: None,
+            execution_model_name: None,
+            enable_three_stage: false,
         }
     }
 
@@ -190,6 +208,9 @@ impl ModelConfig {
             top_p: 0.85,
             timeout: 30,
             auxiliary_model_name: None,
+            planning_model_name: None,
+            execution_model_name: None,
+            enable_three_stage: false,
         }
     }
 }

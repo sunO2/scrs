@@ -49,8 +49,11 @@ async fn main() {
         max_tokens: 4096,
         temperature: 0.2,
         top_p: 0.1,
-        timeout: 60, // 增加超时时间到 60 秒
-        auxiliary_model_name: Some("GLM-4-Flash".to_string()), // 可选：配置辅助模型名称
+        timeout: 180, // 三阶段模式需要多次API调用，增加到 180 秒
+        auxiliary_model_name: Some("glm-4.7".to_string()), // 辅助模型（用于修正）
+        planning_model_name: Some("glm-4.7".to_string()), // 规划模型（大模型，用于三阶段模式）
+        execution_model_name: Some("autoglm-phone".to_string()), // 执行模型（小模型，用于三阶段模式）
+        enable_three_stage: true, // 启用三阶段模式
     };
 
     // 检查 API Key 是否有效

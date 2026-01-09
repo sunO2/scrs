@@ -248,6 +248,14 @@ pub trait ModelClient: Send + Sync {
         screenshot: Option<&str>,
     ) -> Result<ModelResponse, ModelError>;
 
+    /// 设置日志记录器
+    fn set_logger(&self, logger: Option<std::sync::Arc<crate::agent::logger::AgentLogger>>);
+
+    /// 检查是否支持三阶段模式
+    fn supports_three_stage(&self) -> bool {
+        false
+    }
+
     /// 获取模型信息
     fn info(&self) -> ModelInfo;
 }
